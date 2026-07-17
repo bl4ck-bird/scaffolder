@@ -79,6 +79,19 @@ pub struct PayloadEntry {
     pub is_dir: bool,
 }
 
+/// dest 상태 판정 결과(§1.10 write 단계 confirm 판단용). confirm 자체는 하지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestStatus {
+    /// 심링크 해석 후 실제 기록 위치.
+    pub final_path: PathBuf,
+    /// per-component containment 통과 여부(false=외부쓰기 confirm 대상).
+    pub inside_target: bool,
+    /// dest가 이미 존재하는지(심링크 자체 포함).
+    pub exists: bool,
+    /// dest가 심링크인지(심링크 자체, 대상이 아님).
+    pub is_symlink: bool,
+}
+
 /// payload 열거/읽기 + target 쓰기 포트. infra가 구현한다.
 pub trait PayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>>;
@@ -90,6 +103,7 @@ pub trait PayloadStore {
         content: &[u8],
         mode: FileMode,
     ) -> Result<()>;
+    fn dest_status(&self, target_root: &Path, rel: &RelPath) -> Result<DestStatus>;
 }
 
 #[cfg(test)]
