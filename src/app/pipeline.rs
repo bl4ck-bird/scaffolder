@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use crate::domain::answer::{build_context, coerce, validate_choice, AnswerSource, AnswerValue, ScaffolderBuiltins};
+use crate::domain::answer::{
+    build_context, coerce, validate_choice, AnswerSource, AnswerValue, ConditionEvaluator,
+    ScaffolderBuiltins,
+};
 use crate::domain::hook::Confirmer;
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
@@ -35,17 +38,25 @@ pub struct ApplyReport {
     pub planned: Vec<PlannedWrite>,
 }
 
-pub fn apply(
-    req: &ApplyRequest,
-    builtins: ScaffolderBuiltins,
-    manifest_src: &dyn ManifestSource,
-    renderer: &dyn Renderer,
-    payload: &dyn PayloadStore,
-    confirmer: &dyn Confirmer,
-    answer_source: &dyn AnswerSource,
-) -> Result<ApplyReport> {
+/// `apply`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
+pub struct ApplyPorts<'a> {
+    pub manifest_src: &'a dyn ManifestSource,
+    pub renderer: &'a dyn Renderer,
+    pub payload: &'a dyn PayloadStore,
+    pub confirmer: &'a dyn Confirmer,
+    pub answer_source: &'a dyn AnswerSource,
+    pub condition_evaluator: &'a dyn ConditionEvaluator,
+}
+
+/// `resolve_answers`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
+struct AnswerPorts<'a> {
+    answer_source: &'a dyn AnswerSource,
+    condition_evaluator: &'a dyn ConditionEvaluator,
+}
+
+pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts) -> Result<ApplyReport> {
     let manifest_path = req.template_root.join("scaffold.toml");
-    let manifest = manifest_src.load(&manifest_path)?;
+    let manifest = ports.manifest_src.load(&manifest_path)?;
 
     let answers = resolve_answers(
         &manifest.questions,
@@ -53,12 +64,16 @@ pub fn apply(
         &req.answers_file,
         req.defaults_only,
         req.interactive,
-        answer_source,
+        AnswerPorts {
+            answer_source: ports.answer_source,
+            condition_evaluator: ports.condition_evaluator,
+        },
+        &builtins,
     )?;
     let ctx = build_context(answers, builtins);
 
     let files_root = req.template_root.join("files");
-    let entries = payload.list_entries(&files_root)?;
+    let entries = ports.payload.list_entries(&files_root)?;
 
     let mut planned: Vec<PlannedWrite> = Vec::new();
     for entry in entries.iter().filter(|e| !e.is_dir) {
@@ -81,11 +96,11 @@ pub fn apply(
             bail!("source conflict: multiple entries map to output path {out_rel}");
         }
 
-        let raw = payload.read_content(&files_root, entry)?;
+        let raw = ports.payload.read_content(&files_root, entry)?;
         let content = if parsed.render {
             let text = String::from_utf8(raw)
                 .map_err(|_| anyhow::anyhow!("entry {} is not valid UTF-8 but is marked for rendering", entry.rel))?;
-            renderer.render_str(&text, &ctx)?.into_bytes()
+            ports.renderer.render_str(&text, &ctx)?.into_bytes()
         } else {
             raw
         };
@@ -102,11 +117,11 @@ pub fn apply(
     }
 
     for planned_write in &planned {
-        let status = payload.dest_status(&req.target_root, &planned_write.rel)?;
+        let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
 
         // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
         // 계속한다(overwrite와 달리 hard-fail이 아니다).
-        if !status.inside_target && !confirmer.confirm_external_write(&status.final_path) {
+        if !status.inside_target && !ports.confirmer.confirm_external_write(&status.final_path) {
             eprintln!(
                 "warning: skipping {} — write escapes target and was not confirmed",
                 status.final_path.display()
@@ -114,14 +129,14 @@ pub fn apply(
             continue;
         }
 
-        if status.exists && !confirmer.confirm_overwrite(&status.final_path) {
+        if status.exists && !ports.confirmer.confirm_overwrite(&status.final_path) {
             bail!(
                 "destination {} exists; pass --force to overwrite",
                 status.final_path.display()
             );
         }
 
-        payload.write_file(
+        ports.payload.write_file(
             &req.target_root,
             &planned_write.rel,
             &planned_write.content,
@@ -132,26 +147,48 @@ pub fn apply(
     Ok(ApplyReport { planned })
 }
 
-/// answer 확정 precedence(순서대로 첫 매치를 채택):
-/// 1. `--answers`(raw 문자열, `coerce`로 타입 변환)
-/// 2. `--answers-file`(이미 타입이 정해진 값)
-/// 3. `--defaults`면 question default(없으면 에러 — 프롬프트로 폴백하지 않는다)
-/// 4. 대화형이면 `answer_source.ask`
-/// 5. 그 외(비대화형·`--defaults` 아님)는 default(없으면 에러)
+/// 질문을 선언 순서대로 증분 처리해 answer를 확정한다. 매 질문마다 `when`은 지금까지
+/// 확정된 answers + builtins로만 평가한다(뒤 질문은 아직 컨텍스트에 없어 참조 시 에러).
 ///
-/// 확정된 값마다 `validate_choice`로 검증한다. `--answers`/`--answers-file`의 미매칭 키는
-/// 경고만 하고 계속 진행한다.
+/// - `when` 없음, 또는 `when` active: 아래 precedence로 확정해 넣는다.
+///   1. `--answers`(raw 문자열, `coerce`로 타입 변환)
+///   2. `--answers-file`(이미 타입이 정해진 값)
+///   3. `--defaults`면 question default(없으면 에러 — 프롬프트로 폴백하지 않는다)
+///   4. 대화형이면 `answer_source.ask`
+///   5. 그 외(비대화형·`--defaults` 아님)는 default(없으면 에러)
+/// - `when` inactive: 준 답변(`--answers`/`--answers-file`)은 무시한다. default가 있으면
+///   그 값을 넣고, 없으면 넣지 않는다(컨텍스트에서 부재).
+///
+/// 확정된 값(active 값·inactive default 값)마다 `validate_choice`로 검증한다.
+/// `--answers`/`--answers-file`의 미매칭 키는 경고만 하고 계속 진행한다.
 fn resolve_answers(
     questions: &[Question],
     raw_answers: &BTreeMap<String, String>,
     answers_file: &BTreeMap<String, AnswerValue>,
     defaults_only: bool,
     interactive: bool,
-    answer_source: &dyn AnswerSource,
+    ports: AnswerPorts,
+    builtins: &ScaffolderBuiltins,
 ) -> Result<BTreeMap<String, AnswerValue>> {
     let mut resolved = BTreeMap::new();
 
     for question in questions {
+        let active = match &question.when {
+            Some(when) => {
+                let ctx = build_context(resolved.clone(), builtins.clone());
+                ports.condition_evaluator.is_active(when, &ctx)?
+            }
+            None => true,
+        };
+
+        if !active {
+            if let Some(default) = question.default.clone() {
+                validate_choice(question, &default)?;
+                resolved.insert(question.name.clone(), default);
+            }
+            continue;
+        }
+
         let value = if let Some(raw) = raw_answers.get(&question.name) {
             coerce(question, raw)?
         } else if let Some(value) = answers_file.get(&question.name) {
@@ -162,7 +199,7 @@ fn resolve_answers(
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("missing answer for '{}'", question.name))?
         } else if interactive {
-            answer_source.ask(question)?
+            ports.answer_source.ask(question)?
         } else {
             question
                 .default
@@ -268,6 +305,37 @@ mod tests {
         }
     }
 
+    /// 고정 `default`를 반환하되 특정 `when` 문자열에는 `overrides`로 결과를 지정할 수 있는
+    /// 테스트용 `ConditionEvaluator`.
+    struct FakeConditionEvaluator {
+        default: bool,
+        overrides: HashMap<String, bool>,
+    }
+    impl FakeConditionEvaluator {
+        fn always(active: bool) -> Self {
+            Self { default: active, overrides: HashMap::new() }
+        }
+    }
+    impl ConditionEvaluator for FakeConditionEvaluator {
+        fn is_active(&self, when: &str, _ctx: &AnswerContext) -> Result<bool> {
+            Ok(*self.overrides.get(when).unwrap_or(&self.default))
+        }
+    }
+
+    /// `when`을 앞선 질문명 그대로 참조하게 해 증분 컨텍스트 순서를 검증하는 테스트용
+    /// `ConditionEvaluator`. `ctx.answer(when)`이 `Bool`이면 그 값을, 없으면(아직 확정되지
+    /// 않은 뒤 질문을 참조하면) 에러를 낸다.
+    struct AnswerRefConditionEvaluator;
+    impl ConditionEvaluator for AnswerRefConditionEvaluator {
+        fn is_active(&self, when: &str, ctx: &AnswerContext) -> Result<bool> {
+            match ctx.answer(when) {
+                Some(AnswerValue::Bool(b)) => Ok(*b),
+                Some(_) => Ok(true),
+                None => bail!("`when` refers to an unresolved question '{when}'"),
+            }
+        }
+    }
+
     /// 소스 충돌 유발용: 서로 다른 basename이 같은 출력 rel로 매핑되도록(둘 다 verbatim,
     /// `.jinja` strip 후 동일) 두 엔트리를 반환한다.
     struct FakePayloadStore {
@@ -354,11 +422,14 @@ mod tests {
         let report = apply(
             &req,
             builtins(),
-            &FakeManifestSource(manifest),
-            &FakeRenderer,
-            &store,
-            &FakeConfirmer { overwrite: true, external: true },
-            &FakeAnswerSource::unreachable(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
         )
         .expect("apply should succeed");
 
@@ -397,11 +468,14 @@ mod tests {
         let result = apply(
             &req,
             builtins(),
-            &FakeManifestSource(manifest),
-            &FakeRenderer,
-            &store,
-            &FakeConfirmer { overwrite: true, external: true },
-            &FakeAnswerSource::unreachable(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
         );
 
         assert!(result.is_err());
@@ -432,11 +506,14 @@ mod tests {
         let result = apply(
             &req,
             builtins(),
-            &FakeManifestSource(manifest),
-            &FakeRenderer,
-            &store,
-            &FakeConfirmer { overwrite: true, external: true },
-            &FakeAnswerSource::unreachable(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
         );
 
         assert!(result.is_err());
@@ -478,11 +555,14 @@ mod tests {
         let result = apply(
             &req,
             builtins(),
-            &FakeManifestSource(manifest),
-            &FakeRenderer,
-            &store,
-            &FakeConfirmer { overwrite: true, external: false },
-            &FakeAnswerSource::unreachable(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: false },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
         );
 
         assert!(result.is_ok());
@@ -522,11 +602,14 @@ mod tests {
         let result = apply(
             &req,
             builtins(),
-            &FakeManifestSource(manifest),
-            &FakeRenderer,
-            &store,
-            &FakeConfirmer { overwrite: false, external: true },
-            &FakeAnswerSource::unreachable(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: false, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
         );
 
         assert!(result.is_err());
@@ -541,8 +624,19 @@ mod tests {
         let mut file = BTreeMap::new();
         file.insert("project".to_string(), AnswerValue::Text("from-file".to_string()));
 
-        let resolved = resolve_answers(&[question], &raw, &file, false, false, &FakeAnswerSource::unreachable())
-            .expect("resolve should succeed");
+        let resolved = resolve_answers(
+            &[question],
+            &raw,
+            &file,
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
 
         assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("from-cli".to_string())));
     }
@@ -554,8 +648,19 @@ mod tests {
         let mut file = BTreeMap::new();
         file.insert("project".to_string(), AnswerValue::Text("from-file".to_string()));
 
-        let resolved = resolve_answers(&[question], &raw, &file, false, false, &FakeAnswerSource::unreachable())
-            .expect("resolve should succeed");
+        let resolved = resolve_answers(
+            &[question],
+            &raw,
+            &file,
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
 
         assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("from-file".to_string())));
     }
@@ -570,7 +675,11 @@ mod tests {
             &BTreeMap::new(),
             true,
             false,
-            &FakeAnswerSource::unreachable(),
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
         )
         .expect("resolve should succeed");
 
@@ -587,7 +696,11 @@ mod tests {
             &BTreeMap::new(),
             true,
             false,
-            &FakeAnswerSource::unreachable(),
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
         );
 
         assert!(result.is_err());
@@ -598,8 +711,19 @@ mod tests {
         let question = string_question("project", None);
         let source = FakeAnswerSource::returning(AnswerValue::Text("asked".to_string()));
 
-        let resolved = resolve_answers(&[question], &BTreeMap::new(), &BTreeMap::new(), false, true, &source)
-            .expect("resolve should succeed");
+        let resolved = resolve_answers(
+            &[question],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            true,
+            AnswerPorts {
+                answer_source: &source,
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
 
         assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("asked".to_string())));
         assert!(*source.called.borrow(), "ask should have been called");
@@ -615,7 +739,11 @@ mod tests {
             &BTreeMap::new(),
             false,
             false,
-            &FakeAnswerSource::unreachable(),
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
         )
         .expect("resolve should succeed");
 
@@ -632,7 +760,11 @@ mod tests {
             &BTreeMap::new(),
             false,
             false,
-            &FakeAnswerSource::unreachable(),
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
         );
 
         assert!(result.is_err());
@@ -660,7 +792,183 @@ mod tests {
             &file,
             false,
             false,
-            &FakeAnswerSource::unreachable(),
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
+        );
+
+        assert!(result.is_err());
+    }
+
+    fn bool_question(name: &str, default: Option<bool>, when: Option<&str>) -> Question {
+        Question {
+            name: name.to_string(),
+            qtype: QuestionType::Boolean,
+            prompt: None,
+            choices: Vec::new(),
+            default: default.map(AnswerValue::Bool),
+            when: when.map(|w| w.to_string()),
+            help: None,
+        }
+    }
+
+    fn string_question_with_when(name: &str, default: Option<&str>, when: &str) -> Question {
+        Question {
+            name: name.to_string(),
+            qtype: QuestionType::String,
+            prompt: None,
+            choices: Vec::new(),
+            default: default.map(|d| AnswerValue::Text(d.to_string())),
+            when: Some(when.to_string()),
+            help: None,
+        }
+    }
+
+    #[test]
+    fn when_active_resolves_value_via_precedence() {
+        let question = string_question_with_when("feature", None, "gate");
+        let mut raw = BTreeMap::new();
+        raw.insert("feature".to_string(), "on".to_string());
+
+        let resolved = resolve_answers(
+            &[question],
+            &raw,
+            &BTreeMap::new(),
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("feature"), Some(&AnswerValue::Text("on".to_string())));
+    }
+
+    #[test]
+    fn when_inactive_uses_default_and_ignores_given_answer() {
+        let question = string_question_with_when("feature", Some("fallback"), "gate");
+        let mut raw = BTreeMap::new();
+        raw.insert("feature".to_string(), "on".to_string());
+
+        let resolved = resolve_answers(
+            &[question],
+            &raw,
+            &BTreeMap::new(),
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(false),
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("feature"), Some(&AnswerValue::Text("fallback".to_string())));
+    }
+
+    #[test]
+    fn when_inactive_without_default_is_absent_not_error() {
+        let question = string_question_with_when("feature", None, "gate");
+        let mut raw = BTreeMap::new();
+        raw.insert("feature".to_string(), "on".to_string());
+        let mut file = BTreeMap::new();
+        file.insert("feature".to_string(), AnswerValue::Text("from-file".to_string()));
+
+        let resolved = resolve_answers(
+            &[question],
+            &raw,
+            &file,
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(false),
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("feature"), None);
+    }
+
+    #[test]
+    fn when_evaluates_against_incrementally_confirmed_earlier_answer() {
+        let gate = bool_question("gate", None, None);
+        let dependent = string_question_with_when("dependent", None, "gate");
+        let mut raw = BTreeMap::new();
+        raw.insert("gate".to_string(), "true".to_string());
+        raw.insert("dependent".to_string(), "chosen".to_string());
+
+        let resolved = resolve_answers(
+            &[gate, dependent],
+            &raw,
+            &BTreeMap::new(),
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &AnswerRefConditionEvaluator,
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("gate"), Some(&AnswerValue::Bool(true)));
+        assert_eq!(resolved.get("dependent"), Some(&AnswerValue::Text("chosen".to_string())));
+    }
+
+    #[test]
+    fn when_inactive_based_on_earlier_answer_drops_default() {
+        let gate = bool_question("gate", None, None);
+        let dependent = string_question_with_when("dependent", Some("fallback"), "gate");
+        let mut raw = BTreeMap::new();
+        raw.insert("gate".to_string(), "false".to_string());
+        raw.insert("dependent".to_string(), "chosen".to_string());
+
+        let resolved = resolve_answers(
+            &[gate, dependent],
+            &raw,
+            &BTreeMap::new(),
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &AnswerRefConditionEvaluator,
+            },
+            &builtins(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("gate"), Some(&AnswerValue::Bool(false)));
+        assert_eq!(resolved.get("dependent"), Some(&AnswerValue::Text("fallback".to_string())));
+    }
+
+    #[test]
+    fn when_referencing_a_later_unresolved_question_errors() {
+        // 증분 컨텍스트 확인: `when`이 뒤 질문을 참조하면 아직 확정되지 않았으므로 에러다.
+        let dependent = string_question_with_when("dependent", None, "gate");
+        let gate = bool_question("gate", None, None);
+        let mut raw = BTreeMap::new();
+        raw.insert("gate".to_string(), "true".to_string());
+        raw.insert("dependent".to_string(), "chosen".to_string());
+
+        let result = resolve_answers(
+            &[dependent, gate],
+            &raw,
+            &BTreeMap::new(),
+            false,
+            false,
+            AnswerPorts {
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &AnswerRefConditionEvaluator,
+            },
+            &builtins(),
         );
 
         assert!(result.is_err());

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 
-use crate::app::pipeline::{apply, ApplyRequest};
+use crate::app::pipeline::{apply, ApplyPorts, ApplyRequest};
 use crate::app::report::format_plan;
 use crate::cli::confirm::StdConfirmer;
 use crate::cli::prompt::InquireAnswerSource;
@@ -16,6 +16,7 @@ use crate::domain::answer::ScaffolderBuiltins;
 use crate::infra::load::answers::load_answers_file;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::place::FsPayloadStore;
+use crate::infra::render::expr::MiniJinjaConditionEvaluator;
 use crate::infra::render::render::MiniJinjaRenderer;
 
 #[derive(Debug, Args)]
@@ -91,15 +92,19 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let payload = FsPayloadStore;
     let confirmer = StdConfirmer::new(args.force);
     let answer_source = InquireAnswerSource;
+    let condition_evaluator = MiniJinjaConditionEvaluator::new();
 
     let report = apply(
         &req,
         builtins,
-        &manifest_src,
-        &renderer,
-        &payload,
-        &confirmer,
-        &answer_source,
+        ApplyPorts {
+            manifest_src: &manifest_src,
+            renderer: &renderer,
+            payload: &payload,
+            confirmer: &confirmer,
+            answer_source: &answer_source,
+            condition_evaluator: &condition_evaluator,
+        },
     )?;
 
     if args.dry_run {
