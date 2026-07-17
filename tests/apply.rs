@@ -330,3 +330,145 @@ fn apply_noninteractive_without_required_answer_fails() {
 
     cmd.assert().failure();
 }
+
+/// `stacks`(multiselect) + `private`(boolean, default=false, `when = "'ci' in stacks"`) 질문과
+/// 그 값을 렌더하는 템플릿.
+fn write_when_template(dir: &std::path::Path) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[questions]]
+            name = "stacks"
+            type = "multiselect"
+            choices = ["ci", "docker"]
+
+            [[questions]]
+            name = "private"
+            type = "boolean"
+            default = false
+            when = "'ci' in stacks"
+        "#,
+    )
+    .expect("write scaffold.toml");
+
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("config.txt.jinja"), "private={{ private }}").expect("write config.txt.jinja");
+}
+
+#[test]
+fn apply_when_active_uses_given_answer_over_default() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_when_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("stacks=ci")
+        .arg("--answers")
+        .arg("private=true");
+
+    cmd.assert().success();
+
+    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    assert_eq!(content, "private=true");
+}
+
+#[test]
+fn apply_when_inactive_uses_default_and_ignores_given_answer() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_when_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("stacks=docker")
+        .arg("--answers")
+        .arg("private=true");
+
+    cmd.assert().success();
+
+    // stacks에 'ci'가 없으므로 private은 inactive: 준 답변(true)을 무시하고 default(false)를 쓴다.
+    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    assert_eq!(content, "private=false");
+}
+
+/// `stacks`(multiselect) + `extra`(string, default 없음, `when = "'ci' in stacks"`) 질문.
+/// 템플릿은 동일 조건으로 `extra` 접근을 가드해, inactive일 때(컨텍스트 부재) 렌더가 절대
+/// `extra`를 참조하지 않게 한다.
+fn write_when_no_default_template(dir: &std::path::Path, guarded: bool) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[questions]]
+            name = "stacks"
+            type = "multiselect"
+            choices = ["ci", "docker"]
+
+            [[questions]]
+            name = "extra"
+            type = "string"
+            when = "'ci' in stacks"
+        "#,
+    )
+    .expect("write scaffold.toml");
+
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    let template = if guarded {
+        "{% if 'ci' in stacks %}extra={{ extra }}{% else %}no-ci{% endif %}"
+    } else {
+        "extra={{ extra }}"
+    };
+    fs::write(files.join("config.txt.jinja"), template).expect("write config.txt.jinja");
+}
+
+#[test]
+fn apply_when_inactive_without_default_leaves_context_absent_but_guarded_template_still_renders() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_when_no_default_template(template.path(), true);
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("stacks=docker");
+
+    cmd.assert().success();
+
+    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    assert_eq!(content, "no-ci");
+}
+
+#[test]
+fn apply_when_inactive_without_default_errors_if_template_references_it_unconditionally() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_when_no_default_template(template.path(), false);
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("stacks=docker");
+
+    // extra는 inactive이고 default가 없어 컨텍스트에서 부재한다; strict undefined로 렌더가 실패한다.
+    cmd.assert().failure();
+}
