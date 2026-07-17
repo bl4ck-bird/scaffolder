@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -10,7 +11,9 @@ use clap::Args;
 use crate::app::pipeline::{apply, ApplyRequest};
 use crate::app::report::format_plan;
 use crate::cli::confirm::StdConfirmer;
+use crate::cli::prompt::InquireAnswerSource;
 use crate::domain::answer::ScaffolderBuiltins;
+use crate::infra::load::answers::load_answers_file;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::place::FsPayloadStore;
 use crate::infra::render::render::MiniJinjaRenderer;
@@ -24,9 +27,15 @@ pub struct ApplyArgs {
     /// `scaffolder.name` 빌트인(기본: target basename).
     #[arg(long)]
     pub name: Option<String>,
-    /// `k=v` 답변, 반복 가능.
+    /// `k=v` 답변, 반복 가능. 동일 키는 `--answers-file`보다 우선한다.
     #[arg(long = "answers", value_name = "K=V")]
     pub answers: Vec<String>,
+    /// 답변을 담은 TOML 파일 경로.
+    #[arg(long = "answers-file", value_name = "PATH")]
+    pub answers_file: Option<PathBuf>,
+    /// 미답변 질문에 프롬프트하지 않고 default만 쓴다(default 없으면 에러).
+    #[arg(long)]
+    pub defaults: bool,
     /// 기존 dest를 자동으로 덮어쓴다.
     #[arg(long)]
     pub force: bool,
@@ -41,6 +50,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         .with_context(|| format!("failed to resolve target path {:?}", args.target))?;
 
     let answers = parse_answers(&args.answers)?;
+    let answers_file = match &args.answers_file {
+        Some(path) => load_answers_file(path)?,
+        None => BTreeMap::new(),
+    };
+    let interactive = std::io::stdin().is_terminal();
 
     let name = args.name.clone().unwrap_or_else(|| {
         target_root
@@ -61,6 +75,9 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         template_root,
         target_root: target_root.clone(),
         answers,
+        answers_file,
+        defaults_only: args.defaults,
+        interactive,
         dry_run: args.dry_run,
     };
 
@@ -73,8 +90,17 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let renderer = MiniJinjaRenderer::new();
     let payload = FsPayloadStore;
     let confirmer = StdConfirmer::new(args.force);
+    let answer_source = InquireAnswerSource;
 
-    let report = apply(&req, builtins, &manifest_src, &renderer, &payload, &confirmer)?;
+    let report = apply(
+        &req,
+        builtins,
+        &manifest_src,
+        &renderer,
+        &payload,
+        &confirmer,
+        &answer_source,
+    )?;
 
     if args.dry_run {
         println!("{}", format_plan(&report));

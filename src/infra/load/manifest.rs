@@ -8,7 +8,11 @@ use serde::Deserialize;
 
 use crate::domain::answer::AnswerValue;
 use crate::domain::manifest::{Manifest, ManifestSource};
-use crate::domain::question::{validate_question_name, validate_unique_names, Choice, Question, QuestionType};
+use crate::domain::question::{
+    validate_choices, validate_question_name, validate_unique_names, Choice, Question,
+    QuestionType,
+};
+use crate::infra::load::toml_to_answer_value;
 
 /// TOML로 `scaffold.toml`을 읽는 `ManifestSource`.
 pub struct TomlManifestSource;
@@ -45,7 +49,9 @@ fn parse_manifest(text: &str) -> Result<Manifest> {
 
     let mut questions = Vec::with_capacity(raw.questions.len());
     for rq in raw.questions {
-        questions.push(rq.into_domain()?);
+        let question = rq.into_domain()?;
+        validate_choices(&question)?;
+        questions.push(question);
     }
 
     validate_unique_names(questions.iter().map(|q| q.name.as_str()))?;
@@ -121,26 +127,6 @@ fn parse_choice(value: &toml::Value) -> Result<Choice> {
     }
 }
 
-fn toml_to_answer_value(value: &toml::Value) -> Result<AnswerValue> {
-    match value {
-        toml::Value::String(s) => Ok(AnswerValue::Text(s.clone())),
-        toml::Value::Integer(i) => Ok(AnswerValue::Int(*i)),
-        toml::Value::Float(f) => Ok(AnswerValue::Float(*f)),
-        toml::Value::Boolean(b) => Ok(AnswerValue::Bool(*b)),
-        toml::Value::Array(items) => {
-            let items = items
-                .iter()
-                .map(|v| match v {
-                    toml::Value::String(s) => Ok(s.clone()),
-                    other => bail!("list value {other:?} must be a string"),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(AnswerValue::List(items))
-        }
-        other => bail!("unsupported value {other:?}"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +183,42 @@ mod tests {
             [[questions]]
             name = "FOO"
             type = "string"
+        "#;
+
+        assert!(parse_manifest(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_select_choice_value_containing_comma() {
+        let toml = r#"
+            [[questions]]
+            name = "tags"
+            type = "select"
+            choices = ["a,b", "c"]
+        "#;
+
+        assert!(parse_manifest(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_multiselect_choice_value_containing_whitespace() {
+        let toml = r#"
+            [[questions]]
+            name = "stacks"
+            type = "multiselect"
+            choices = ["has space", "clean"]
+        "#;
+
+        assert!(parse_manifest(toml).is_err());
+    }
+
+    #[test]
+    fn rejects_multiselect_choice_with_non_string_value() {
+        let toml = r#"
+            [[questions]]
+            name = "years"
+            type = "multiselect"
+            choices = [2018, 2021]
         "#;
 
         assert!(parse_manifest(toml).is_err());
