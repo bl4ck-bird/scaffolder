@@ -8,7 +8,6 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::domain::answer::AnswerContext;
 use crate::domain::ignore::{IgnoreMatcher, IgnoreSource};
-use crate::domain::place::RelPath;
 use crate::domain::render::Renderer;
 
 const STATIC_NAME: &str = ".scaffoldignore";
@@ -67,10 +66,8 @@ impl IgnoreSource for FsIgnoreSource<'_> {
 struct GitignoreMatcher(Gitignore);
 
 impl IgnoreMatcher for GitignoreMatcher {
-    fn is_ignored(&self, rel: &RelPath) -> bool {
-        self.0
-            .matched_path_or_any_parents(rel.as_path(), false)
-            .is_ignore()
+    fn is_ignored(&self, rel: &Path) -> bool {
+        self.0.matched_path_or_any_parents(rel, false).is_ignore()
     }
 }
 
@@ -115,8 +112,8 @@ mod tests {
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
-        assert!(matcher.is_ignored(&crate::domain::place::safe_rel_path("foo.tmp").unwrap()));
-        assert!(!matcher.is_ignored(&crate::domain::place::safe_rel_path("foo.rs").unwrap()));
+        assert!(matcher.is_ignored(Path::new("foo.tmp")));
+        assert!(!matcher.is_ignored(Path::new("foo.rs")));
     }
 
     #[test]
@@ -133,11 +130,11 @@ mod tests {
 
         let ctx_without_docker = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx_without_docker).unwrap();
-        assert!(matcher.is_ignored(&crate::domain::place::safe_rel_path("Dockerfile").unwrap()));
+        assert!(matcher.is_ignored(Path::new("Dockerfile")));
 
         let ctx_with_docker = ctx_with_stacks(vec!["docker".to_string()]);
         let matcher = source.load(dir.path(), &ctx_with_docker).unwrap();
-        assert!(!matcher.is_ignored(&crate::domain::place::safe_rel_path("Dockerfile").unwrap()));
+        assert!(!matcher.is_ignored(Path::new("Dockerfile")));
     }
 
     #[test]
@@ -149,7 +146,7 @@ mod tests {
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
-        assert!(!matcher.is_ignored(&crate::domain::place::safe_rel_path("anything.txt").unwrap()));
+        assert!(!matcher.is_ignored(Path::new("anything.txt")));
     }
 
     #[test]
@@ -162,8 +159,22 @@ mod tests {
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
-        assert!(matcher.is_ignored(&crate::domain::place::safe_rel_path("build/x.txt").unwrap()));
-        assert!(!matcher.is_ignored(&crate::domain::place::safe_rel_path("src/main.rs").unwrap()));
+        assert!(matcher.is_ignored(Path::new("build/x.txt")));
+        assert!(!matcher.is_ignored(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn negation_pattern_unexcludes_matched_file() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(STATIC_NAME), "*.log\n!keep.log\n").unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer);
+        let ctx = ctx_with_stacks(vec![]);
+        let matcher = source.load(dir.path(), &ctx).unwrap();
+
+        assert!(matcher.is_ignored(Path::new("a.log")));
+        assert!(!matcher.is_ignored(Path::new("keep.log")));
     }
 
     #[test]

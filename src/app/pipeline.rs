@@ -94,10 +94,10 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
             Some(parent) => parent.join(&parsed.output_base).to_string_lossy().into_owned(),
             None => parsed.output_base.clone(),
         };
-        let out_rel = safe_rel_path(&out_rel_str)?;
-        if matcher.is_ignored(&out_rel) {
+        if matcher.is_ignored(std::path::Path::new(&out_rel_str)) {
             continue;
         }
+        let out_rel = safe_rel_path(&out_rel_str)?;
 
         if planned.iter().any(|p| p.rel == out_rel) {
             bail!("source conflict: multiple entries map to output path {out_rel}");
@@ -406,8 +406,8 @@ mod tests {
 
     struct FakeIgnoreMatcher(Vec<String>);
     impl IgnoreMatcher for FakeIgnoreMatcher {
-        fn is_ignored(&self, rel: &RelPath) -> bool {
-            self.0.iter().any(|ignored| ignored == &rel.to_string())
+        fn is_ignored(&self, rel: &Path) -> bool {
+            self.0.iter().any(|ignored| Path::new(ignored) == rel)
         }
     }
 
