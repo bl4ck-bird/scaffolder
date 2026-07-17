@@ -17,7 +17,7 @@ use crate::infra::render::render::MiniJinjaRenderer;
 
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
-    /// 템플릿 로컬 경로(스토어 조회는 M5).
+    /// 템플릿 로컬 경로(스토어 조회는 이후 지원 예정).
     pub template: String,
     /// 새로 생성하거나 채울 대상 경로(`.` 허용).
     pub target: String,

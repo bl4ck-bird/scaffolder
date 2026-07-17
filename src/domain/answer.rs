@@ -8,7 +8,7 @@ use anyhow::{bail, Result};
 
 use crate::domain::question::QuestionType;
 
-/// 확정된 answer 값. 타입 그대로 유지한다(§1.2).
+/// 확정된 answer 값. 타입 그대로 유지한다.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnswerValue {
     Text(String),
@@ -18,7 +18,7 @@ pub enum AnswerValue {
     Bool(bool),
 }
 
-/// `scaffolder.*` 렌더 빌트인(§1.2).
+/// `scaffolder.*` 렌더 빌트인.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScaffolderBuiltins {
     pub name: String,
@@ -52,8 +52,8 @@ pub fn build_context(
     AnswerContext { answers, builtins }
 }
 
-/// `--answers` 문자열 coerce(§1.2). S1은 `QuestionType::String`만 지원 —
-/// 다른 타입은 아직 구현되지 않았음을 명확히 알린다(S2).
+/// `--answers` 문자열 coerce. 현재는 `QuestionType::String`만 지원하고,
+/// 다른 타입은 아직 미구현임을 명확히 알린다.
 pub fn coerce_string(qtype: QuestionType, raw: &str) -> Result<AnswerValue> {
     match qtype {
         QuestionType::String => Ok(AnswerValue::Text(raw.to_string())),

@@ -9,7 +9,7 @@ pub trait Renderer {
     fn render_str(&self, template: &str, context: &AnswerContext) -> Result<String>;
 }
 
-/// `partials/` 이름 조회 포트(§1.4). 이후 슬라이스에서 배선한다.
+/// `partials/` 이름 조회 포트. 이후 슬라이스에서 배선한다.
 pub trait PartialSource {
     fn partial(&self, name: &str) -> Result<Option<String>>;
 }

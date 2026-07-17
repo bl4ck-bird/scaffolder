@@ -1,4 +1,4 @@
-//! apply 라이프사이클 조립(BLUEPRINT §1.9 최소): 매니페스트 파싱 → answer 확정 → plan(부작용
+//! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → plan(부작용
 //! 없음) → dry-run이면 종료 → write(overwrite/외부쓰기 confirm 반영). `.scaffoldroot`·ignore·
 //! partials·data·hook은 이후 슬라이스에서 확장한다. 도메인 포트만 사용한다.
 
@@ -93,7 +93,7 @@ pub fn apply(
     for planned_write in &planned {
         let status = payload.dest_status(&req.target_root, &planned_write.rel)?;
 
-        // §1.10: target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
+        // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
         // 계속한다(overwrite와 달리 hard-fail이 아니다).
         if !status.inside_target && !confirmer.confirm_external_write(&status.final_path) {
             eprintln!(
@@ -121,9 +121,9 @@ pub fn apply(
     Ok(ApplyReport { planned })
 }
 
-/// `--answers` > default 순으로 확정한다(§1.9-2 축소판; 프롬프트는 M2+). S1은
+/// `--answers` > default 순으로 확정한다(프롬프트 지원은 이후로 미룬다). 현재는
 /// `QuestionType::String`만 coerce하고, 다른 타입은 default를 그대로 통과시킨다.
-/// `req.answers`의 미매칭 키는 경고만 하고 계속 진행한다(§1.2 unknown=경고).
+/// `req.answers`의 미매칭 키는 경고만 하고 계속 진행한다.
 fn resolve_answers(
     questions: &[Question],
     raw_answers: &BTreeMap<String, String>,
@@ -369,8 +369,8 @@ mod tests {
     #[test]
     fn external_write_without_confirmation_is_skipped_not_written() {
         // rel 문자열은 `safe_rel_path`가 literal '..'을 이미 거부하므로 항상 정상 형태다;
-        // containment 이탈은 상위 심링크 등 최종 경로 해석 단계에서만 드러난다(§1.10).
-        // 미승인 외부쓰기는 그 엔트리만 스킵하고 apply는 성공한다(§1.10 "아니면 스킵").
+        // containment 이탈은 상위 심링크 등 최종 경로 해석 단계에서만 드러난다.
+        // 미승인 외부쓰기는 그 엔트리만 스킵하고 apply는 성공한다.
         let manifest = Manifest { questions: vec![] };
         let mut dest_statuses = HashMap::new();
         dest_statuses.insert(

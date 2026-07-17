@@ -21,7 +21,7 @@ impl std::fmt::Display for RelPath {
     }
 }
 
-/// 컴포넌트 단위로 정규화하고 리터럴 `..` 이탈·절대경로를 거부한다(§1.10).
+/// 컴포넌트 단위로 정규화하고 리터럴 `..` 이탈·절대경로를 거부한다.
 pub fn safe_rel_path(input: &str) -> Result<RelPath> {
     let mut normalized = PathBuf::new();
 
@@ -46,7 +46,7 @@ pub fn safe_rel_path(input: &str) -> Result<RelPath> {
 }
 
 /// Unix permission bits: `0o666` base → executable `|0o111` → private `&^0o77` →
-/// readonly `&^0o222`. 특수비트 없음(§1.3).
+/// readonly `&^0o222`. 특수비트 없음.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMode(u32);
 
@@ -72,14 +72,14 @@ impl FileMode {
     }
 }
 
-/// payload 엔트리 하나(§1.9-8 write 단계 입력).
+/// payload 엔트리 하나(write 단계 입력).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadEntry {
     pub rel: RelPath,
     pub is_dir: bool,
 }
 
-/// dest 상태 판정 결과(§1.10 write 단계 confirm 판단용). confirm 자체는 하지 않는다.
+/// dest 상태 판정 결과(write 단계 confirm 판단용). confirm 자체는 하지 않는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DestStatus {
     /// 심링크 해석 후 실제 기록 위치.

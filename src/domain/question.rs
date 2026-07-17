@@ -17,7 +17,7 @@ pub enum QuestionType {
     Boolean,
 }
 
-/// select/multiselect choice. 값은 리터럴 타입을 유지한다(§1.2, 라벨≠값은 `{label, value}`).
+/// select/multiselect choice. 값은 리터럴 타입을 유지한다(라벨≠값은 `{label, value}`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice {
     pub label: String,
@@ -57,7 +57,7 @@ pub fn validate_question_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// 대소문자 무시 유일성 검증(§1.2).
+/// 대소문자 무시 유일성 검증.
 pub fn validate_unique_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
     let mut seen = HashSet::new();
     for name in names {

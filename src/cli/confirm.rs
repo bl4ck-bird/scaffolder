@@ -5,8 +5,8 @@ use std::path::Path;
 
 use crate::domain::hook::Confirmer;
 
-/// tty 프롬프트 기반 `Confirmer`. `force`는 overwrite 전용 게이트다(§2) — 대화형일 때만
-/// 프롬프트하고 비대화형은 거부한다(§1.9-5, §1.10 — 미승인 write는 에러로 이어져야 하는 보안 표면).
+/// tty 프롬프트 기반 `Confirmer`. `force`는 overwrite 전용 게이트다 — 대화형일 때만
+/// 프롬프트하고 비대화형은 거부한다(미승인 write는 에러로 이어져야 하는 보안 표면).
 pub struct StdConfirmer {
     pub force: bool,
     pub interactive: bool,
@@ -42,7 +42,7 @@ impl StdConfirmer {
 
 impl Confirmer for StdConfirmer {
     fn confirm_hook(&self, _description: &str) -> bool {
-        // S1은 훅을 실행하지 않는다(M4에서 실제 confirm 프롬프트로 대체).
+        // 현재는 훅을 실행하지 않는다(이후 실제 confirm 프롬프트로 대체 예정).
         self.force || self.interactive
     }
 

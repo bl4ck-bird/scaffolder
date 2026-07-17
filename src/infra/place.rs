@@ -32,7 +32,7 @@ impl PayloadStore for FsPayloadStore {
         content: &[u8],
         _mode: FileMode,
     ) -> Result<()> {
-        // mode(chmod) 적용은 M3로 연기: S1은 OS 기본 생성 권한(umask 적용)에 의존한다.
+        // 권한 비트 적용은 이후로 미루고, 지금은 OS 기본 생성 권한(umask 적용)에 의존한다.
         let path = target_root.join(rel.as_path());
 
         if let Some(parent) = path.parent() {
@@ -40,7 +40,7 @@ impl PayloadStore for FsPayloadStore {
                 .with_context(|| format!("failed to create parent directory for {}", path.display()))?;
         }
 
-        // 기존 dest가 심링크면 대상을 따라 덮어쓰지 않도록 먼저 unlink한다(§1.10) — 그렇지
+        // 기존 dest가 심링크면 대상을 따라 덮어쓰지 않도록 먼저 unlink한다 — 그렇지
         // 않으면 fs::write가 심링크를 따라가 target 밖의 심링크 대상을 오염시킬 수 있다.
         match path.symlink_metadata() {
             Ok(meta) if meta.file_type().is_symlink() => {
@@ -87,7 +87,7 @@ impl PayloadStore for FsPayloadStore {
 }
 
 /// 존재하는 최상위 조상까지 canonicalize(심링크 해석)한 뒤 비존재 tail 컴포넌트를 그대로
-/// 재결합한다. `path` 전체가 존재하면 최종 심링크까지 포함해 통째로 해석된다(§1.10).
+/// 재결합한다. `path` 전체가 존재하면 최종 심링크까지 포함해 통째로 해석된다.
 fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     let mut existing = path.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
