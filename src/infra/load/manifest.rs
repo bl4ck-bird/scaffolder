@@ -9,6 +9,7 @@ use serde::Deserialize;
 use crate::domain::answer::AnswerValue;
 use crate::domain::manifest::{Manifest, ManifestSource};
 use crate::domain::question::{validate_question_name, validate_unique_names, Choice, Question, QuestionType};
+use crate::infra::load::toml_to_answer_value;
 
 /// TOML로 `scaffold.toml`을 읽는 `ManifestSource`.
 pub struct TomlManifestSource;
@@ -118,26 +119,6 @@ fn parse_choice(value: &toml::Value) -> Result<Choice> {
             AnswerValue::List(_) => bail!("choice value cannot be a list"),
         };
         Ok(Choice { label, value })
-    }
-}
-
-fn toml_to_answer_value(value: &toml::Value) -> Result<AnswerValue> {
-    match value {
-        toml::Value::String(s) => Ok(AnswerValue::Text(s.clone())),
-        toml::Value::Integer(i) => Ok(AnswerValue::Int(*i)),
-        toml::Value::Float(f) => Ok(AnswerValue::Float(*f)),
-        toml::Value::Boolean(b) => Ok(AnswerValue::Bool(*b)),
-        toml::Value::Array(items) => {
-            let items = items
-                .iter()
-                .map(|v| match v {
-                    toml::Value::String(s) => Ok(s.clone()),
-                    other => bail!("list value {other:?} must be a string"),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(AnswerValue::List(items))
-        }
-        other => bail!("unsupported value {other:?}"),
     }
 }
 

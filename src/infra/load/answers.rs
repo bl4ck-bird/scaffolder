@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 use crate::domain::answer::AnswerValue;
+use crate::infra::load::toml_to_answer_value;
 
 pub fn load_answers_file(path: &Path) -> Result<BTreeMap<String, AnswerValue>> {
     let text = fs::read_to_string(path)
@@ -26,26 +27,6 @@ fn parse_answers(text: &str) -> Result<BTreeMap<String, AnswerValue>> {
         answers.insert(name, value);
     }
     Ok(answers)
-}
-
-fn toml_to_answer_value(value: &toml::Value) -> Result<AnswerValue> {
-    match value {
-        toml::Value::String(s) => Ok(AnswerValue::Text(s.clone())),
-        toml::Value::Integer(i) => Ok(AnswerValue::Int(*i)),
-        toml::Value::Float(f) => Ok(AnswerValue::Float(*f)),
-        toml::Value::Boolean(b) => Ok(AnswerValue::Bool(*b)),
-        toml::Value::Array(items) => {
-            let items = items
-                .iter()
-                .map(|v| match v {
-                    toml::Value::String(s) => Ok(s.clone()),
-                    other => bail!("list value {other:?} must be a string"),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(AnswerValue::List(items))
-        }
-        other => bail!("unsupported value {other:?}"),
-    }
 }
 
 #[cfg(test)]
