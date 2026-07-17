@@ -51,6 +51,9 @@ default = "MIT"
 Files ending in `.jinja` are rendered with the answers (and are written
 without the `.jinja` suffix); every other file is copied byte-for-byte.
 
+Questions can be typed as `string`, `int`, `float`, `boolean`, `select`, or
+`multiselect`; answers keep their declared type through rendering.
+
 Apply a template to a new directory:
 
 ```sh
@@ -58,7 +61,9 @@ scaffolder apply my-template ./demo --answers project=demo
 ```
 
 Answers for any question without a supplied value fall back to its
-`default`; a question with no default and no supplied answer is an error.
+`default`; a question with no default and no supplied answer is an error,
+unless you're at an interactive terminal, in which case you'll be prompted
+for it.
 
 ### Flags
 
@@ -66,6 +71,8 @@ Answers for any question without a supplied value fall back to its
 |---|---|
 | `--name <n>` | value for the `scaffolder.name` template variable (default: target directory basename) |
 | `--answers K=V` | answer a question non-interactively; repeatable |
+| `--answers-file <path>` | TOML file of answers (`name = value`); a matching `--answers K=V` takes precedence over the same key here |
+| `--defaults` | use each question's default without prompting; fails if a question has no default |
 | `--force` | overwrite existing files in the target without prompting |
 | `--dry-run` | print the write plan without touching the filesystem |
 
