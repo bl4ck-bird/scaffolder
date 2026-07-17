@@ -23,6 +23,61 @@ fn write_template(dir: &std::path::Path) {
     fs::write(files.join("src/main.rs"), "fn main(){}").expect("write src/main.rs");
 }
 
+/// `store_dir/name`에 조회 가능한 스토어 템플릿을 만든다.
+fn write_store_template(store_dir: &std::path::Path, name: &str) {
+    let template_dir = store_dir.join(name);
+    fs::create_dir_all(&template_dir).expect("mkdir store template dir");
+    write_template(&template_dir);
+}
+
+#[test]
+fn apply_template_dir_resolves_store_name_and_writes_files() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    write_store_template(store_dir.path(), "mystore");
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg("mystore")
+        .arg(&target)
+        .arg("--template-dir")
+        .arg(store_dir.path())
+        .arg("--answers")
+        .arg("project=demo");
+
+    cmd.assert().success();
+
+    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    assert_eq!(readme, "# demo");
+
+    let main_rs = fs::read_to_string(target.join("src/main.rs")).expect("read src/main.rs");
+    assert_eq!(main_rs, "fn main(){}");
+}
+
+#[test]
+fn apply_template_dir_missing_store_name_fails_with_searched_locations() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg("ghost")
+        .arg(&target)
+        .arg("--template-dir")
+        .arg(store_dir.path());
+
+    cmd.assert()
+        .failure()
+        .stderr(contains("ghost"))
+        .stderr(contains(store_dir.path().to_str().expect("utf8 path")));
+
+    assert!(!target.exists(), "missing template must not create the target directory");
+}
+
 #[test]
 fn apply_renders_and_writes_files() {
     let template = tempfile::tempdir().expect("template tempdir");

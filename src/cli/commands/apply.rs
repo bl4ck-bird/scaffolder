@@ -13,19 +13,24 @@ use crate::app::report::format_plan;
 use crate::cli::confirm::StdConfirmer;
 use crate::cli::prompt::InquireAnswerSource;
 use crate::domain::answer::ScaffolderBuiltins;
+use crate::domain::store::TemplateStore;
 use crate::infra::load::answers::load_answers_file;
 use crate::infra::load::ignore::FsIgnoreSource;
 use crate::infra::load::manifest::TomlManifestSource;
+use crate::infra::load::store::FsTemplateStore;
 use crate::infra::place::FsPayloadStore;
 use crate::infra::render::expr::MiniJinjaConditionEvaluator;
 use crate::infra::render::render::MiniJinjaRenderer;
 
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
-    /// 템플릿 로컬 경로(스토어 조회는 이후 지원 예정).
+    /// 템플릿 스토어명 또는 로컬 경로.
     pub template: String,
     /// 새로 생성하거나 채울 대상 경로(`.` 허용).
     pub target: String,
+    /// 스토어 조회 시 `$SCAFFOLDER_HOME`/`~/.scaffolder`보다 우선하는 디렉토리.
+    #[arg(long = "template-dir", value_name = "PATH")]
+    pub template_dir: Option<PathBuf>,
     /// `scaffolder.name` 빌트인(기본: target basename).
     #[arg(long)]
     pub name: Option<String>,
@@ -47,7 +52,8 @@ pub struct ApplyArgs {
 }
 
 pub fn run(args: ApplyArgs) -> Result<()> {
-    let template_root = PathBuf::from(&args.template);
+    let store = FsTemplateStore::new(args.template_dir.clone());
+    let template_root = store.resolve(&args.template)?;
     let target_root = std::path::absolute(PathBuf::from(&args.target))
         .with_context(|| format!("failed to resolve target path {:?}", args.target))?;
 
