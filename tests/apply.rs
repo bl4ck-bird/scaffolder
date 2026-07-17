@@ -294,6 +294,28 @@ fn apply_defaults_flag_fails_when_required_answer_has_no_default() {
 }
 
 #[test]
+fn apply_unmatched_answers_key_warns_on_stderr_and_still_succeeds() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo")
+        .arg("--answers")
+        .arg("stray=x");
+
+    cmd.assert()
+        .success()
+        .stderr(contains("does not match any question"));
+}
+
+#[test]
 fn apply_noninteractive_without_required_answer_fails() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_multi_type_template(template.path()); // port has no default
