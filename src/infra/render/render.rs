@@ -30,6 +30,7 @@ pub(crate) fn base_environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.add_function("env", env_fn);
+    crate::infra::render::filters::register(&mut env);
     env
 }
 
