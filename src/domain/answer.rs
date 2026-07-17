@@ -183,6 +183,11 @@ pub trait AnswerSource {
     fn ask(&self, question: &Question) -> Result<AnswerValue>;
 }
 
+/// `Question.when` 조건식 평가 포트. infra가 MiniJinja로 구현한다.
+pub trait ConditionEvaluator {
+    fn is_active(&self, when: &str, ctx: &AnswerContext) -> Result<bool>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

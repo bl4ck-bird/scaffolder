@@ -16,14 +16,21 @@ pub struct MiniJinjaRenderer {
 
 impl MiniJinjaRenderer {
     pub fn new() -> Self {
-        let mut env = Environment::new();
-        env.set_undefined_behavior(UndefinedBehavior::Strict);
+        let mut env = base_environment();
         // minijinja 기본은 trailing newline을 잘라낸다; 생성 파일의 `insert_final_newline` 관례를
         // 지키려면 보존해야 한다.
         env.set_keep_trailing_newline(true);
-        env.add_function("env", env_fn);
         Self { env }
     }
+}
+
+/// strict undefined + `env()` 빌트인을 갖춘 기본 `Environment`. 렌더와 `when` 표현식 평가가
+/// 공유한다.
+pub(crate) fn base_environment() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.add_function("env", env_fn);
+    env
 }
 
 impl Default for MiniJinjaRenderer {
@@ -46,9 +53,10 @@ fn env_fn(name: String, default: Option<String>) -> String {
 }
 
 /// `AnswerContext`를 이름 기반 동적 조회로 노출한다. 포트가 전체 열거 API를 제공하지 않으므로
-/// top-level(`{{ name }}`)과 `scaffolder.*` 조회는 값 단위로 위임한다.
+/// top-level(`{{ name }}`)과 `scaffolder.*` 조회는 값 단위로 위임한다. `when` 표현식 평가와
+/// 컨텍스트 매핑을 공유하기 위해 crate 내부에 노출한다.
 #[derive(Debug)]
-struct RenderContext(AnswerContext);
+pub(crate) struct RenderContext(pub(crate) AnswerContext);
 
 impl Object for RenderContext {
     fn get_value(self: &Arc<Self>, key: &JinjaValue) -> Option<JinjaValue> {
