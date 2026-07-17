@@ -54,13 +54,30 @@ pub fn build_context(
 
 /// choice 값을 매칭에 쓸 정규 문자열로 만든다. `List`는 choice 값으로 쓰이지 않는 스펙이라
 /// 원소를 콤마로 join해 결정적 fallback만 제공한다.
-fn canonical_string(value: &AnswerValue) -> String {
+pub(crate) fn canonical_string(value: &AnswerValue) -> String {
     match value {
         AnswerValue::Text(s) => s.clone(),
         AnswerValue::Int(i) => i.to_string(),
         AnswerValue::Float(f) => f.to_string(),
         AnswerValue::Bool(b) => b.to_string(),
         AnswerValue::List(items) => items.join(","),
+    }
+}
+
+/// `--answers`의 raw 문자열을 choice 값의 타입으로 해석해 비교한다. `f64::to_string`이
+/// `2.0`을 `"2"`로 축약하는 등 `canonical_string`은 표시 형식만 정규화하므로, choice 매칭에는
+/// 타입별 파싱 비교가 필요하다.
+fn raw_matches_choice(raw: &str, value: &AnswerValue) -> bool {
+    match value {
+        AnswerValue::Text(s) => raw == s,
+        AnswerValue::Int(i) => raw.parse::<i64>().is_ok_and(|v| v == *i),
+        AnswerValue::Float(f) => raw.parse::<f64>().is_ok_and(|v| v.is_finite() && v == *f),
+        AnswerValue::Bool(b) => match raw {
+            "true" => *b,
+            "false" => !*b,
+            _ => false,
+        },
+        AnswerValue::List(_) => false,
     }
 }
 
@@ -96,7 +113,7 @@ pub fn coerce(question: &Question, raw: &str) -> Result<AnswerValue> {
             question
                 .choices
                 .iter()
-                .find(|choice| canonical_string(&choice.value) == raw)
+                .find(|choice| raw_matches_choice(raw, &choice.value))
                 .map(|choice| choice.value.clone())
                 .ok_or_else(|| anyhow!("value {raw:?} is not a valid choice for question {name:?}"))
         }
@@ -107,10 +124,13 @@ pub fn coerce(question: &Question, raw: &str) -> Result<AnswerValue> {
             let mut selected = Vec::new();
             for item in raw.split(',') {
                 let item = item.trim();
+                if item.is_empty() {
+                    continue;
+                }
                 let choice = question
                     .choices
                     .iter()
-                    .find(|choice| canonical_string(&choice.value) == item)
+                    .find(|choice| raw_matches_choice(item, &choice.value))
                     .ok_or_else(|| {
                         anyhow!("value {item:?} is not a valid choice for question {name:?}")
                     })?;
@@ -269,6 +289,25 @@ mod tests {
     }
 
     #[test]
+    fn coerce_select_matches_float_choice_across_formatting() {
+        let choices = vec![
+            Choice {
+                label: "1.5".to_string(),
+                value: AnswerValue::Float(1.5),
+            },
+            Choice {
+                label: "2.0".to_string(),
+                value: AnswerValue::Float(2.0),
+            },
+        ];
+        let q = question(QuestionType::Select, choices);
+
+        assert_eq!(coerce(&q, "2.0").unwrap(), AnswerValue::Float(2.0));
+        assert_eq!(coerce(&q, "2").unwrap(), AnswerValue::Float(2.0));
+        assert!(coerce(&q, "3.0").is_err());
+    }
+
+    #[test]
     fn coerce_select_rejects_when_no_choices_configured() {
         let q = question(QuestionType::Select, vec![]);
         assert!(coerce(&q, "anything").is_err());
@@ -298,6 +337,27 @@ mod tests {
         );
         assert_eq!(coerce(&q, "").unwrap(), AnswerValue::List(vec![]));
         assert!(coerce(&q, "docker,unknown").is_err());
+    }
+
+    #[test]
+    fn coerce_multiselect_skips_empty_trailing_segments() {
+        let choices = vec![
+            Choice {
+                label: "docker".to_string(),
+                value: AnswerValue::Text("docker".to_string()),
+            },
+            Choice {
+                label: "ci".to_string(),
+                value: AnswerValue::Text("ci".to_string()),
+            },
+        ];
+        let q = question(QuestionType::Multiselect, choices);
+
+        assert_eq!(
+            coerce(&q, "docker,").unwrap(),
+            AnswerValue::List(vec!["docker".to_string()])
+        );
+        assert_eq!(coerce(&q, "").unwrap(), AnswerValue::List(vec![]));
     }
 
     #[test]
