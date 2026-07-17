@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use crate::domain::answer::{build_context, coerce_string, AnswerValue, ScaffolderBuiltins};
+use crate::domain::answer::{build_context, coerce, validate_choice, AnswerSource, AnswerValue, ScaffolderBuiltins};
 use crate::domain::hook::Confirmer;
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
@@ -19,6 +19,9 @@ pub struct ApplyRequest {
     pub template_root: PathBuf,
     pub target_root: PathBuf,
     pub answers: BTreeMap<String, String>,
+    pub answers_file: BTreeMap<String, AnswerValue>,
+    pub defaults_only: bool,
+    pub interactive: bool,
     pub dry_run: bool,
 }
 
@@ -39,11 +42,19 @@ pub fn apply(
     renderer: &dyn Renderer,
     payload: &dyn PayloadStore,
     confirmer: &dyn Confirmer,
+    answer_source: &dyn AnswerSource,
 ) -> Result<ApplyReport> {
     let manifest_path = req.template_root.join("scaffold.toml");
     let manifest = manifest_src.load(&manifest_path)?;
 
-    let answers = resolve_answers(&manifest.questions, &req.answers)?;
+    let answers = resolve_answers(
+        &manifest.questions,
+        &req.answers,
+        &req.answers_file,
+        req.defaults_only,
+        req.interactive,
+        answer_source,
+    )?;
     let ctx = build_context(answers, builtins);
 
     let files_root = req.template_root.join("files");
@@ -121,31 +132,59 @@ pub fn apply(
     Ok(ApplyReport { planned })
 }
 
-/// `--answers` > default 순으로 확정한다(프롬프트 지원은 이후로 미룬다). 현재는
-/// `QuestionType::String`만 coerce하고, 다른 타입은 default를 그대로 통과시킨다.
-/// `req.answers`의 미매칭 키는 경고만 하고 계속 진행한다.
+/// answer 확정 precedence(순서대로 첫 매치를 채택):
+/// 1. `--answers`(raw 문자열, `coerce`로 타입 변환)
+/// 2. `--answers-file`(이미 타입이 정해진 값)
+/// 3. `--defaults`면 question default(없으면 에러 — 프롬프트로 폴백하지 않는다)
+/// 4. 대화형이면 `answer_source.ask`
+/// 5. 그 외(비대화형·`--defaults` 아님)는 default(없으면 에러)
+///
+/// 확정된 값마다 `validate_choice`로 검증한다. `--answers`/`--answers-file`의 미매칭 키는
+/// 경고만 하고 계속 진행한다.
 fn resolve_answers(
     questions: &[Question],
     raw_answers: &BTreeMap<String, String>,
+    answers_file: &BTreeMap<String, AnswerValue>,
+    defaults_only: bool,
+    interactive: bool,
+    answer_source: &dyn AnswerSource,
 ) -> Result<BTreeMap<String, AnswerValue>> {
     let mut resolved = BTreeMap::new();
 
     for question in questions {
-        let value = match raw_answers.get(&question.name) {
-            Some(raw) => coerce_string(question.qtype, raw)?,
-            None => match &question.default {
-                Some(default) => default.clone(),
-                None => bail!("missing answer for '{}'", question.name),
-            },
+        let value = if let Some(raw) = raw_answers.get(&question.name) {
+            coerce(question, raw)?
+        } else if let Some(value) = answers_file.get(&question.name) {
+            value.clone()
+        } else if defaults_only {
+            question
+                .default
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("missing answer for '{}'", question.name))?
+        } else if interactive {
+            answer_source.ask(question)?
+        } else {
+            question
+                .default
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("missing answer for '{}'", question.name))?
         };
+
+        validate_choice(question, &value)?;
         resolved.insert(question.name.clone(), value);
     }
 
     let known: std::collections::HashSet<&str> =
         questions.iter().map(|q| q.name.as_str()).collect();
+    let mut warned: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for key in raw_answers.keys() {
-        if !known.contains(key.as_str()) {
+        if !known.contains(key.as_str()) && warned.insert(key.as_str()) {
             eprintln!("warning: '--answers {key}=...' does not match any question; ignoring");
+        }
+    }
+    for key in answers_file.keys() {
+        if !known.contains(key.as_str()) && warned.insert(key.as_str()) {
+            eprintln!("warning: '--answers-file' key '{key}' does not match any question; ignoring");
         }
     }
 
@@ -201,6 +240,31 @@ mod tests {
         }
         fn confirm_external_write(&self, _path: &Path) -> bool {
             self.external
+        }
+    }
+
+    /// 고정값을 반환하거나(`returning`), 호출되면 실패해야 함을 표시하는(`unreachable`)
+    /// 테스트용 `AnswerSource`. precedence가 프롬프트를 건너뛰어야 하는 경로에서
+    /// `ask`가 호출되지 않았음을 검증하는 데 쓴다.
+    struct FakeAnswerSource {
+        value: Option<AnswerValue>,
+        called: RefCell<bool>,
+    }
+    impl FakeAnswerSource {
+        fn returning(value: AnswerValue) -> Self {
+            Self { value: Some(value), called: RefCell::new(false) }
+        }
+
+        fn unreachable() -> Self {
+            Self { value: None, called: RefCell::new(false) }
+        }
+    }
+    impl AnswerSource for FakeAnswerSource {
+        fn ask(&self, question: &Question) -> Result<AnswerValue> {
+            *self.called.borrow_mut() = true;
+            self.value
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("ask should not have been called for '{}'", question.name))
         }
     }
 
@@ -281,6 +345,9 @@ mod tests {
             template_root: PathBuf::from("/tpl"),
             target_root: PathBuf::from("/target"),
             answers,
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
             dry_run: true,
         };
 
@@ -291,6 +358,7 @@ mod tests {
             &FakeRenderer,
             &store,
             &FakeConfirmer { overwrite: true, external: true },
+            &FakeAnswerSource::unreachable(),
         )
         .expect("apply should succeed");
 
@@ -320,6 +388,9 @@ mod tests {
             template_root: PathBuf::from("/tpl"),
             target_root: PathBuf::from("/target"),
             answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
             dry_run: true,
         };
 
@@ -330,6 +401,7 @@ mod tests {
             &FakeRenderer,
             &store,
             &FakeConfirmer { overwrite: true, external: true },
+            &FakeAnswerSource::unreachable(),
         );
 
         assert!(result.is_err());
@@ -351,6 +423,9 @@ mod tests {
             template_root: PathBuf::from("/tpl"),
             target_root: PathBuf::from("/target"),
             answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
             dry_run: true,
         };
 
@@ -361,6 +436,7 @@ mod tests {
             &FakeRenderer,
             &store,
             &FakeConfirmer { overwrite: true, external: true },
+            &FakeAnswerSource::unreachable(),
         );
 
         assert!(result.is_err());
@@ -393,6 +469,9 @@ mod tests {
             template_root: PathBuf::from("/tpl"),
             target_root: PathBuf::from("/target"),
             answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
             dry_run: false,
         };
 
@@ -403,6 +482,7 @@ mod tests {
             &FakeRenderer,
             &store,
             &FakeConfirmer { overwrite: true, external: false },
+            &FakeAnswerSource::unreachable(),
         );
 
         assert!(result.is_ok());
@@ -433,6 +513,9 @@ mod tests {
             template_root: PathBuf::from("/tpl"),
             target_root: PathBuf::from("/target"),
             answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
             dry_run: false,
         };
 
@@ -443,9 +526,143 @@ mod tests {
             &FakeRenderer,
             &store,
             &FakeConfirmer { overwrite: false, external: true },
+            &FakeAnswerSource::unreachable(),
         );
 
         assert!(result.is_err());
         assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
+    fn cli_answers_override_answers_file() {
+        let question = string_question("project", Some("default-val"));
+        let mut raw = BTreeMap::new();
+        raw.insert("project".to_string(), "from-cli".to_string());
+        let mut file = BTreeMap::new();
+        file.insert("project".to_string(), AnswerValue::Text("from-file".to_string()));
+
+        let resolved = resolve_answers(&[question], &raw, &file, false, false, &FakeAnswerSource::unreachable())
+            .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("from-cli".to_string())));
+    }
+
+    #[test]
+    fn answers_file_used_when_cli_answer_missing() {
+        let question = string_question("project", Some("default-val"));
+        let raw = BTreeMap::new();
+        let mut file = BTreeMap::new();
+        file.insert("project".to_string(), AnswerValue::Text("from-file".to_string()));
+
+        let resolved = resolve_answers(&[question], &raw, &file, false, false, &FakeAnswerSource::unreachable())
+            .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("from-file".to_string())));
+    }
+
+    #[test]
+    fn defaults_only_uses_question_default_when_unanswered() {
+        let question = string_question("project", Some("default-val"));
+
+        let resolved = resolve_answers(
+            &[question],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            true,
+            false,
+            &FakeAnswerSource::unreachable(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("default-val".to_string())));
+    }
+
+    #[test]
+    fn defaults_only_without_default_is_error() {
+        let question = string_question("project", None);
+
+        let result = resolve_answers(
+            &[question],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            true,
+            false,
+            &FakeAnswerSource::unreachable(),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn interactive_asks_when_unanswered_and_not_defaults_only() {
+        let question = string_question("project", None);
+        let source = FakeAnswerSource::returning(AnswerValue::Text("asked".to_string()));
+
+        let resolved = resolve_answers(&[question], &BTreeMap::new(), &BTreeMap::new(), false, true, &source)
+            .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("asked".to_string())));
+        assert!(*source.called.borrow(), "ask should have been called");
+    }
+
+    #[test]
+    fn noninteractive_unanswered_falls_back_to_default() {
+        let question = string_question("project", Some("default-val"));
+
+        let resolved = resolve_answers(
+            &[question],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            &FakeAnswerSource::unreachable(),
+        )
+        .expect("resolve should succeed");
+
+        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("default-val".to_string())));
+    }
+
+    #[test]
+    fn noninteractive_unanswered_without_default_is_error() {
+        let question = string_question("project", None);
+
+        let result = resolve_answers(
+            &[question],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            &FakeAnswerSource::unreachable(),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn answers_file_value_failing_choice_validation_is_error() {
+        use crate::domain::question::Choice;
+
+        let question = Question {
+            name: "license".to_string(),
+            qtype: QuestionType::Select,
+            prompt: None,
+            choices: vec![Choice { label: "MIT".to_string(), value: AnswerValue::Text("MIT".to_string()) }],
+            default: None,
+            when: None,
+            help: None,
+        };
+        let mut file = BTreeMap::new();
+        file.insert("license".to_string(), AnswerValue::Text("BSD".to_string()));
+
+        let result = resolve_answers(
+            &[question],
+            &BTreeMap::new(),
+            &file,
+            false,
+            false,
+            &FakeAnswerSource::unreachable(),
+        );
+
+        assert!(result.is_err());
     }
 }

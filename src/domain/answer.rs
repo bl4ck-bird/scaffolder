@@ -52,15 +52,6 @@ pub fn build_context(
     AnswerContext { answers, builtins }
 }
 
-/// `--answers` 문자열 coerce. 현재는 `QuestionType::String`만 지원하고,
-/// 다른 타입은 아직 미구현임을 명확히 알린다.
-pub fn coerce_string(qtype: QuestionType, raw: &str) -> Result<AnswerValue> {
-    match qtype {
-        QuestionType::String => Ok(AnswerValue::Text(raw.to_string())),
-        other => bail!("coerce for question type {other:?} is not implemented yet"),
-    }
-}
-
 /// choice 값을 매칭에 쓸 정규 문자열로 만든다. `List`는 choice 값으로 쓰이지 않는 스펙이라
 /// 원소를 콤마로 join해 결정적 fallback만 제공한다.
 fn canonical_string(value: &AnswerValue) -> String {
@@ -214,17 +205,6 @@ mod tests {
         assert_eq!(ctx.answer("missing"), None);
         assert_eq!(ctx.builtins().name, "demo");
         assert_eq!(ctx.builtins().os, "macos");
-    }
-
-    #[test]
-    fn coerce_string_wraps_text() {
-        let value = coerce_string(QuestionType::String, "hello").unwrap();
-        assert_eq!(value, AnswerValue::Text("hello".to_string()));
-    }
-
-    #[test]
-    fn coerce_string_rejects_unsupported_types() {
-        assert!(coerce_string(QuestionType::Int, "3").is_err());
     }
 
     #[test]
