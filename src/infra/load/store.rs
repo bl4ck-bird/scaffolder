@@ -36,12 +36,24 @@ impl FsTemplateStore {
 
 impl TemplateStore for FsTemplateStore {
     fn resolve(&self, name_or_path: &str) -> Result<PathBuf> {
-        let as_path = Path::new(name_or_path);
-        // "."/".."는 존재하는 디렉토리라도 스토어 이름 검증 경로로 보내 base 밖 참조를 막는다.
-        if name_or_path != "." && name_or_path != ".." && as_path.is_dir() {
-            return Ok(as_path.to_path_buf());
+        // "."/".."는 디렉토리로 존재해도 항상 거부한다 — CWD/상위를 암묵적 템플릿으로 못 쓰게
+        // 막는 가드를 path-like 분기보다 앞세워 유지한다(base 밖 참조 방지).
+        if name_or_path == "." || name_or_path == ".." {
+            bail!("template name {name_or_path:?} must be a single path component");
         }
 
+        // 구분자 포함 = 명시적 경로 지정으로 간주해 스토어 체인 없이 로컬로 즉시 판정한다.
+        if name_or_path.contains('/') {
+            let as_path = Path::new(name_or_path);
+            return if as_path.is_dir() {
+                Ok(as_path.to_path_buf())
+            } else {
+                bail!("local template path {name_or_path:?} not found or is not a directory");
+            };
+        }
+
+        // bare 단일 컴포넌트 = 스토어명 후보 — 우선순위 체인을 먼저 순회해 --template-dir 등이
+        // CWD의 동명 디렉토리에 조용히 밀리지 않게 한다(로컬은 스토어 미스 시에만 fallback).
         let name = validate_store_name(name_or_path)?;
 
         let bases = self.store_bases();
@@ -50,6 +62,11 @@ impl TemplateStore for FsTemplateStore {
             if candidate.join("scaffold.toml").is_file() {
                 return Ok(candidate);
             }
+        }
+
+        let as_path = Path::new(name_or_path);
+        if as_path.is_dir() {
+            return Ok(as_path.to_path_buf());
         }
 
         let searched = bases
@@ -61,13 +78,9 @@ impl TemplateStore for FsTemplateStore {
     }
 }
 
-/// 스토어 이름은 base 하위 단일 경로 컴포넌트여야 한다(구분자·`.`/`..` 금지).
+/// 스토어명 후보는 빈 문자열이 아니어야 한다(구분자·`.`/`..`는 resolve에서 이미 배제됨).
 fn validate_store_name(name_or_path: &str) -> Result<&str> {
-    if name_or_path.is_empty()
-        || name_or_path.contains('/')
-        || name_or_path == "."
-        || name_or_path == ".."
-    {
+    if name_or_path.is_empty() {
         bail!("template name {name_or_path:?} must be a single path component");
     }
     Ok(name_or_path)
@@ -274,10 +287,17 @@ mod tests {
     #[test]
     fn missing_template_reports_searched_locations() {
         let template_dir = tempdir().expect("tempdir");
+        // dirs::home_dir()는 $HOME을 읽으므로, 실제 개발자 홈에 우연히 같은 이름의 스토어
+        // 엔트리가 있어도 이 테스트가 오염되지 않게 가짜 홈으로 격리한다.
+        let fake_home = tempdir().expect("tempdir");
         let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
 
         let err = with_env_vars(
-            &[("SCAFFOLDER_HOME", None), ("XDG_CONFIG_HOME", None)],
+            &[
+                ("SCAFFOLDER_HOME", None),
+                ("XDG_CONFIG_HOME", None),
+                ("HOME", Some(fake_home.path().to_str().expect("utf8 path"))),
+            ],
             || store.resolve("does-not-exist"),
         )
         .expect_err("missing template should error");
@@ -285,6 +305,48 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("does-not-exist"));
         assert!(message.contains(template_dir.path().to_str().expect("utf8 path")));
+    }
+
+    #[test]
+    fn falls_through_to_scaffolder_home_when_name_absent_from_template_dir() {
+        let template_dir = tempdir().expect("tempdir");
+        let scaffolder_home = tempdir().expect("tempdir");
+
+        let template_path = scaffolder_home.path().join("onlyhome");
+        std::fs::create_dir_all(&template_path).expect("create template dir");
+        std::fs::write(template_path.join("scaffold.toml"), "").expect("write manifest");
+
+        let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
+
+        let resolved = with_env_vars(
+            &[
+                (
+                    "SCAFFOLDER_HOME",
+                    Some(scaffolder_home.path().to_str().expect("utf8 path")),
+                ),
+                ("XDG_CONFIG_HOME", None),
+            ],
+            || store.resolve("onlyhome"),
+        )
+        .expect("template-dir miss should fall through to SCAFFOLDER_HOME");
+
+        assert_eq!(resolved, template_path);
+    }
+
+    #[test]
+    fn path_like_missing_local_directory_gives_local_path_error_not_store_name_error() {
+        // TempDir이 스코프를 벗어나며 자체 정리되므로, 그 경로는 확실히 존재하지 않는다.
+        let vanished = tempdir().expect("tempdir").path().join("gone");
+        let vanished_str = vanished.to_str().expect("utf8 path").to_string();
+        let store = FsTemplateStore::new(None);
+
+        let err = store
+            .resolve(&vanished_str)
+            .expect_err("missing local path should error");
+
+        let message = err.to_string();
+        assert!(message.contains("local template path"));
+        assert!(!message.contains("single path component"));
     }
 
     #[test]
