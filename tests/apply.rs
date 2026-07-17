@@ -39,6 +39,8 @@ fn apply_template_dir_resolves_store_name_and_writes_files() {
 
     let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
     cmd.current_dir(workdir.path())
+        .env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
         .arg("apply")
         .arg("mystore")
         .arg(&target)
@@ -60,10 +62,16 @@ fn apply_template_dir_resolves_store_name_and_writes_files() {
 fn apply_template_dir_missing_store_name_fails_with_searched_locations() {
     let store_dir = tempfile::tempdir().expect("store tempdir");
     let workdir = tempfile::tempdir().expect("workdir tempdir");
+    // Isolated stand-in for the developer's real home so an ambient ~/.scaffolder/ghost
+    // can't make this "missing" case unexpectedly resolve.
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
     let target = workdir.path().join("demo");
 
     let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
     cmd.current_dir(workdir.path())
+        .env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
+        .env("HOME", fake_home.path())
         .arg("apply")
         .arg("ghost")
         .arg(&target)
