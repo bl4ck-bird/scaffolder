@@ -364,6 +364,48 @@ mod tests {
     }
 
     #[test]
+    fn external_write_without_confirmation_is_error_and_nothing_written() {
+        // rel 문자열은 `safe_rel_path`가 literal '..'을 이미 거부하므로 항상 정상 형태다;
+        // containment 이탈은 상위 심링크 등 최종 경로 해석 단계에서만 드러난다(§1.10).
+        let manifest = Manifest { questions: vec![] };
+        let mut dest_statuses = HashMap::new();
+        dest_statuses.insert(
+            "linked/outside.txt".to_string(),
+            DestStatus {
+                final_path: PathBuf::from("/outside/outside.txt"),
+                inside_target: false,
+                exists: false,
+                is_symlink: false,
+            },
+        );
+        let store = FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("linked/outside.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("linked/outside.txt".to_string(), b"content".to_vec())]),
+            dest_statuses: RefCell::new(dest_statuses),
+            written: RefCell::new(Vec::new()),
+        };
+
+        let req = ApplyRequest {
+            template_root: PathBuf::from("/tpl"),
+            target_root: PathBuf::from("/target"),
+            answers: BTreeMap::new(),
+            dry_run: false,
+        };
+
+        let result = apply(
+            &req,
+            builtins(),
+            &FakeManifestSource(manifest),
+            &FakeRenderer,
+            &store,
+            &FakeConfirmer { overwrite: true, external: false },
+        );
+
+        assert!(result.is_err());
+        assert!(store.written.borrow().is_empty());
+    }
+
+    #[test]
     fn existing_destination_without_overwrite_confirmation_is_error() {
         let manifest = Manifest { questions: vec![] };
         let mut dest_statuses = HashMap::new();
