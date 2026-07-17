@@ -93,11 +93,14 @@ pub fn apply(
     for planned_write in &planned {
         let status = payload.dest_status(&req.target_root, &planned_write.rel)?;
 
+        // §1.10: target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
+        // 계속한다(overwrite와 달리 hard-fail이 아니다).
         if !status.inside_target && !confirmer.confirm_external_write(&status.final_path) {
-            bail!(
-                "write to {} escapes target and was not confirmed",
+            eprintln!(
+                "warning: skipping {} — write escapes target and was not confirmed",
                 status.final_path.display()
             );
+            continue;
         }
 
         if status.exists && !confirmer.confirm_overwrite(&status.final_path) {
@@ -364,9 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn external_write_without_confirmation_is_error_and_nothing_written() {
+    fn external_write_without_confirmation_is_skipped_not_written() {
         // rel 문자열은 `safe_rel_path`가 literal '..'을 이미 거부하므로 항상 정상 형태다;
         // containment 이탈은 상위 심링크 등 최종 경로 해석 단계에서만 드러난다(§1.10).
+        // 미승인 외부쓰기는 그 엔트리만 스킵하고 apply는 성공한다(§1.10 "아니면 스킵").
         let manifest = Manifest { questions: vec![] };
         let mut dest_statuses = HashMap::new();
         dest_statuses.insert(
@@ -401,7 +405,7 @@ mod tests {
             &FakeConfirmer { overwrite: true, external: false },
         );
 
-        assert!(result.is_err());
+        assert!(result.is_ok());
         assert!(store.written.borrow().is_empty());
     }
 
