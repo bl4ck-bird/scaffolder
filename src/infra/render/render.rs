@@ -18,6 +18,9 @@ impl MiniJinjaRenderer {
     pub fn new() -> Self {
         let mut env = Environment::new();
         env.set_undefined_behavior(UndefinedBehavior::Strict);
+        // minijinja 기본은 trailing newline을 잘라낸다; 생성 파일의 `insert_final_newline` 관례를
+        // 지키려면 보존해야 한다.
+        env.set_keep_trailing_newline(true);
         env.add_function("env", env_fn);
         Self { env }
     }
@@ -153,5 +156,50 @@ mod tests {
         let result = renderer.render_str("{{ nope }}", &ctx);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn trailing_newline_is_preserved() {
+        let ctx = build_context(BTreeMap::new(), builtins());
+
+        let renderer = MiniJinjaRenderer::new();
+        let out = renderer.render_str("line\n", &ctx).unwrap();
+
+        assert_eq!(out, "line\n");
+    }
+
+    #[test]
+    fn int_answer_preserves_numeric_comparison() {
+        let mut answers = BTreeMap::new();
+        answers.insert("edition".to_string(), AnswerValue::Int(2021));
+        let ctx = build_context(answers, builtins());
+
+        let renderer = MiniJinjaRenderer::new();
+        let out = renderer
+            .render_str("{% if edition >= 2021 %}yes{% else %}no{% endif %}", &ctx)
+            .unwrap();
+
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn env_present_var_renders_value() {
+        // SAFETY: 테스트 프로세스는 단일 스레드로 env를 다루지 않지만, 테스트 병렬 실행 시
+        // 이름 충돌을 피하기 위해 고유한 var명을 쓰고 끝에 정리한다.
+        unsafe {
+            std::env::set_var("SC_TEST_PRESENT", "v");
+        }
+        let ctx = build_context(BTreeMap::new(), builtins());
+
+        let renderer = MiniJinjaRenderer::new();
+        let out = renderer
+            .render_str("{{ env(\"SC_TEST_PRESENT\") }}", &ctx)
+            .unwrap();
+
+        unsafe {
+            std::env::remove_var("SC_TEST_PRESENT");
+        }
+
+        assert_eq!(out, "v");
     }
 }
