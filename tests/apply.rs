@@ -3,6 +3,7 @@
 use std::fs;
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 fn write_template(dir: &std::path::Path) {
@@ -556,4 +557,61 @@ fn apply_jinja_scaffoldignore_excludes_output_path_based_on_answers() {
         target2.join("Dockerfile").exists(),
         "Dockerfile must be placed when stacks includes docker"
     );
+}
+
+#[test]
+fn apply_scaffoldignore_matches_rendered_output_name_not_source_name() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    fs::write(template.path().join(".scaffoldignore"), "*.tmp\n").expect("write .scaffoldignore");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    // 소스명은 .tmp.jinja로 끝나 *.tmp에 매치되지 않지만, 렌더된 출력명 config.tmp는 매치된다.
+    fs::write(files.join("config.tmp.jinja"), "rendered").expect("write config.tmp.jinja");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().success();
+
+    assert!(
+        !target.join("config.tmp").exists(),
+        "output name config.tmp must be excluded by *.tmp even though source is config.tmp.jinja"
+    );
+    assert!(target.join("keep.txt").exists(), "non-ignored file must be written");
+}
+
+#[test]
+fn apply_dry_run_omits_ignored_files_from_plan_output() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    fs::write(template.path().join(".scaffoldignore"), "*.tmp\n").expect("write .scaffoldignore");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+    fs::write(files.join("scratch.tmp"), "scratch").expect("write scratch.tmp");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--dry-run");
+
+    cmd.assert()
+        .success()
+        .stdout(contains("keep.txt"))
+        .stdout(contains("scratch.tmp").not());
+
+    assert!(!target.exists(), "dry-run must not create the target directory");
 }

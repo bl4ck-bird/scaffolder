@@ -68,7 +68,9 @@ struct GitignoreMatcher(Gitignore);
 
 impl IgnoreMatcher for GitignoreMatcher {
     fn is_ignored(&self, rel: &RelPath) -> bool {
-        self.0.matched(rel.as_path(), false).is_ignore()
+        self.0
+            .matched_path_or_any_parents(rel.as_path(), false)
+            .is_ignore()
     }
 }
 
@@ -148,6 +150,20 @@ mod tests {
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
         assert!(!matcher.is_ignored(&crate::domain::place::safe_rel_path("anything.txt").unwrap()));
+    }
+
+    #[test]
+    fn static_ignore_file_directory_pattern_excludes_subtree_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(STATIC_NAME), "build/\n").unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer);
+        let ctx = ctx_with_stacks(vec![]);
+        let matcher = source.load(dir.path(), &ctx).unwrap();
+
+        assert!(matcher.is_ignored(&crate::domain::place::safe_rel_path("build/x.txt").unwrap()));
+        assert!(!matcher.is_ignored(&crate::domain::place::safe_rel_path("src/main.rs").unwrap()));
     }
 
     #[test]
