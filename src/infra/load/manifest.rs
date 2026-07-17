@@ -12,7 +12,7 @@ use crate::domain::question::{
     validate_choices, validate_question_name, validate_unique_names, Choice, Question,
     QuestionType,
 };
-use crate::infra::load::toml_to_answer_value;
+use crate::infra::load::{toml_to_answer_value, toml_to_data_value};
 
 /// TOML로 `scaffold.toml`을 읽는 `ManifestSource`.
 pub struct TomlManifestSource;
@@ -30,6 +30,8 @@ impl ManifestSource for TomlManifestSource {
 struct RawManifest {
     #[serde(default)]
     questions: Vec<RawQuestion>,
+    #[serde(default)]
+    data: toml::value::Table,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,7 +58,9 @@ fn parse_manifest(text: &str) -> Result<Manifest> {
 
     validate_unique_names(questions.iter().map(|q| q.name.as_str()))?;
 
-    Ok(Manifest { questions })
+    let data = toml_to_data_value(&toml::Value::Table(raw.data));
+
+    Ok(Manifest { questions, data })
 }
 
 impl RawQuestion {

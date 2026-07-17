@@ -12,6 +12,7 @@ use crate::domain::answer::{
     build_context, coerce, validate_choice, AnswerSource, AnswerValue, ConditionEvaluator,
     ScaffolderBuiltins,
 };
+use crate::domain::data::{merge, DataSource, DataValue};
 use crate::domain::hook::Confirmer;
 use crate::domain::ignore::IgnoreSource;
 use crate::domain::manifest::ManifestSource;
@@ -43,6 +44,7 @@ pub struct ApplyReport {
 /// `apply`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
 pub struct ApplyPorts<'a> {
     pub manifest_src: &'a dyn ManifestSource,
+    pub data_source: &'a dyn DataSource,
     pub renderer: &'a dyn Renderer,
     pub payload: &'a dyn PayloadStore,
     pub confirmer: &'a dyn Confirmer,
@@ -73,7 +75,11 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         },
         &builtins,
     )?;
-    let ctx = build_context(answers, builtins);
+
+    // §1.9 step 3: answer 확정 이후 data(`[data]` + `data/*.toml`)를 병합한다.
+    let file_data = ports.data_source.load(&req.template_root)?;
+    let data = merge(manifest.data, file_data);
+    let ctx = build_context(answers, data, builtins);
     let matcher = ports.ignore_source.load(&req.template_root, &ctx)?;
 
     let files_root = req.template_root.join("files");
@@ -182,7 +188,9 @@ fn resolve_answers(
     for question in questions {
         let active = match &question.when {
             Some(when) => {
-                let ctx = build_context(resolved.clone(), builtins.clone());
+                // §1.9: data 병합(step 3)은 answer 확정(step 2) 이후다. 따라서 `when`은 앞선
+                // 답변 + builtins만 참조하며 data는 아직 컨텍스트에 없다.
+                let ctx = build_context(resolved.clone(), DataValue::empty_table(), builtins.clone());
                 ports.condition_evaluator.is_active(when, &ctx)?
             }
             None => true,
@@ -262,6 +270,13 @@ mod tests {
     impl ManifestSource for FakeManifestSource {
         fn load(&self, _path: &Path) -> Result<Manifest> {
             Ok(self.0.clone())
+        }
+    }
+
+    struct FakeDataSource;
+    impl DataSource for FakeDataSource {
+        fn load(&self, _template_root: &Path) -> Result<DataValue> {
+            Ok(DataValue::empty_table())
         }
     }
 
@@ -427,6 +442,7 @@ mod tests {
     fn dry_run_produces_plan_without_writing() {
         let manifest = Manifest {
             questions: vec![string_question("project", None)],
+            ..Default::default()
         };
         let store = FakePayloadStore {
             entries: vec![PayloadEntry {
@@ -455,6 +471,7 @@ mod tests {
             builtins(),
             ApplyPorts {
                 manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
                 confirmer: &FakeConfirmer { overwrite: true, external: true },
@@ -473,7 +490,10 @@ mod tests {
 
     #[test]
     fn source_conflict_on_same_output_path_is_error() {
-        let manifest = Manifest { questions: vec![] };
+        let manifest = Manifest {
+            questions: vec![],
+            ..Default::default()
+        };
         let store = FakePayloadStore {
             entries: vec![
                 PayloadEntry { rel: safe_rel_path("README.md").unwrap(), is_dir: false },
@@ -502,6 +522,7 @@ mod tests {
             builtins(),
             ApplyPorts {
                 manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
                 confirmer: &FakeConfirmer { overwrite: true, external: true },
@@ -518,6 +539,7 @@ mod tests {
     fn missing_required_answer_without_default_is_error() {
         let manifest = Manifest {
             questions: vec![string_question("project", None)],
+            ..Default::default()
         };
         let store = FakePayloadStore {
             entries: vec![],
@@ -541,6 +563,7 @@ mod tests {
             builtins(),
             ApplyPorts {
                 manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
                 confirmer: &FakeConfirmer { overwrite: true, external: true },
@@ -558,7 +581,10 @@ mod tests {
         // rel 문자열은 `safe_rel_path`가 literal '..'을 이미 거부하므로 항상 정상 형태다;
         // containment 이탈은 상위 심링크 등 최종 경로 해석 단계에서만 드러난다.
         // 미승인 외부쓰기는 그 엔트리만 스킵하고 apply는 성공한다.
-        let manifest = Manifest { questions: vec![] };
+        let manifest = Manifest {
+            questions: vec![],
+            ..Default::default()
+        };
         let mut dest_statuses = HashMap::new();
         dest_statuses.insert(
             "linked/outside.txt".to_string(),
@@ -591,6 +617,7 @@ mod tests {
             builtins(),
             ApplyPorts {
                 manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
                 confirmer: &FakeConfirmer { overwrite: true, external: false },
@@ -606,7 +633,10 @@ mod tests {
 
     #[test]
     fn existing_destination_without_overwrite_confirmation_is_error() {
-        let manifest = Manifest { questions: vec![] };
+        let manifest = Manifest {
+            questions: vec![],
+            ..Default::default()
+        };
         let mut dest_statuses = HashMap::new();
         dest_statuses.insert(
             "file.txt".to_string(),
@@ -639,6 +669,7 @@ mod tests {
             builtins(),
             ApplyPorts {
                 manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
                 confirmer: &FakeConfirmer { overwrite: false, external: true },

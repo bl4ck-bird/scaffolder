@@ -16,6 +16,7 @@ use crate::domain::answer::ScaffolderBuiltins;
 use crate::domain::render::PartialSource;
 use crate::domain::store::TemplateStore;
 use crate::infra::load::answers::load_answers_file;
+use crate::infra::load::data::FsDataSource;
 use crate::infra::load::ignore::FsIgnoreSource;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::load::partials::FsPartialSource;
@@ -97,6 +98,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     }
 
     let manifest_src = TomlManifestSource;
+    let data_source = FsDataSource;
     let partials = FsPartialSource.load(&req.template_root)?;
     let renderer = MiniJinjaRenderer::with_partials(partials)?;
     let payload = FsPayloadStore;
@@ -110,6 +112,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         builtins,
         ApplyPorts {
             manifest_src: &manifest_src,
+            data_source: &data_source,
             renderer: &renderer,
             payload: &payload,
             confirmer: &confirmer,

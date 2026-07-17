@@ -820,3 +820,46 @@ fn apply_include_of_unregistered_partial_fails() {
         "failed include must not produce output"
     );
 }
+
+#[test]
+fn apply_exposes_merged_data_in_render_context() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(
+        template.path().join("scaffold.toml"),
+        r#"
+            [data]
+            greeting = "hi"
+
+            [[data.rules]]
+            ext = "rs"
+
+            [[data.rules]]
+            ext = "toml"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let data_dir = template.path().join("data");
+    fs::create_dir_all(&data_dir).expect("mkdir data");
+    fs::write(data_dir.join("extra.toml"), "flag = true\n").expect("write data/extra.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(
+        files.join("out.txt.jinja"),
+        "{{ data.greeting }} {{ data.flag }}\n{% for r in data.rules %}{{ r.ext }},{% endfor %}",
+    )
+    .expect("write out.txt.jinja");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().success();
+
+    let out = fs::read_to_string(target.join("out.txt")).expect("read out.txt");
+    assert_eq!(out, "hi true\nrs,toml,");
+}

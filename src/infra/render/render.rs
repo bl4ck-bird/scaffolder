@@ -8,6 +8,7 @@ use minijinja::value::{Object, Value as JinjaValue};
 use minijinja::{Environment, UndefinedBehavior};
 
 use crate::domain::answer::{AnswerContext, AnswerValue, ScaffolderBuiltins};
+use crate::domain::data::DataValue;
 use crate::domain::render::Renderer;
 
 /// MiniJinja 기반 `Renderer`. strict undefined와 `scaffolder.*`/`env()` 빌트인을 배선한다.
@@ -78,7 +79,24 @@ impl Object for RenderContext {
         if key == "scaffolder" {
             return Some(builtins_value(self.0.builtins()));
         }
+        if key == "data" {
+            return Some(data_value(self.0.data()));
+        }
         self.0.answer(key).map(answer_value)
+    }
+}
+
+fn data_value(value: &DataValue) -> JinjaValue {
+    match value {
+        DataValue::Table(map) => map
+            .iter()
+            .map(|(k, v)| (k.as_str(), data_value(v)))
+            .collect(),
+        DataValue::Array(items) => items.iter().map(data_value).collect(),
+        DataValue::Str(s) => JinjaValue::from(s.as_str()),
+        DataValue::Int(i) => JinjaValue::from(*i),
+        DataValue::Float(f) => JinjaValue::from(*f),
+        DataValue::Bool(b) => JinjaValue::from(*b),
     }
 }
 
@@ -128,7 +146,7 @@ mod tests {
     fn renders_top_level_answer() {
         let mut answers = BTreeMap::new();
         answers.insert("name".to_string(), AnswerValue::Text("proj".to_string()));
-        let ctx = build_context(answers, builtins());
+        let ctx = build_context(answers, DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer.render_str("hi {{ name }}", &ctx).unwrap();
@@ -138,7 +156,7 @@ mod tests {
 
     #[test]
     fn renders_scaffolder_builtin() {
-        let ctx = build_context(BTreeMap::new(), builtins());
+        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer.render_str("{{ scaffolder.os }}", &ctx).unwrap();
@@ -148,7 +166,7 @@ mod tests {
 
     #[test]
     fn env_missing_var_renders_empty() {
-        let ctx = build_context(BTreeMap::new(), builtins());
+        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer
@@ -160,7 +178,7 @@ mod tests {
 
     #[test]
     fn env_missing_var_uses_default() {
-        let ctx = build_context(BTreeMap::new(), builtins());
+        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer
@@ -172,7 +190,7 @@ mod tests {
 
     #[test]
     fn strict_undefined_errors_on_unknown_variable() {
-        let ctx = build_context(BTreeMap::new(), builtins());
+        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let result = renderer.render_str("{{ nope }}", &ctx);
@@ -182,7 +200,7 @@ mod tests {
 
     #[test]
     fn trailing_newline_is_preserved() {
-        let ctx = build_context(BTreeMap::new(), builtins());
+        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer.render_str("line\n", &ctx).unwrap();
@@ -194,7 +212,7 @@ mod tests {
     fn int_answer_preserves_numeric_comparison() {
         let mut answers = BTreeMap::new();
         answers.insert("edition".to_string(), AnswerValue::Int(2021));
-        let ctx = build_context(answers, builtins());
+        let ctx = build_context(answers, DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer
@@ -211,7 +229,7 @@ mod tests {
         unsafe {
             std::env::set_var("SC_TEST_PRESENT", "v");
         }
-        let ctx = build_context(BTreeMap::new(), builtins());
+        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer

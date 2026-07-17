@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 
+use crate::domain::data::DataValue;
 use crate::domain::question::{Question, QuestionType};
 
 /// 확정된 answer 값. 타입 그대로 유지한다.
@@ -32,6 +33,7 @@ pub struct ScaffolderBuiltins {
 #[derive(Debug, Clone)]
 pub struct AnswerContext {
     answers: BTreeMap<String, AnswerValue>,
+    data: DataValue,
     builtins: ScaffolderBuiltins,
 }
 
@@ -43,13 +45,23 @@ impl AnswerContext {
     pub fn builtins(&self) -> &ScaffolderBuiltins {
         &self.builtins
     }
+
+    /// `data.*`로 노출되는 정적 데이터 트리(`[data]` + `data/*.toml` 병합 결과).
+    pub fn data(&self) -> &DataValue {
+        &self.data
+    }
 }
 
 pub fn build_context(
     answers: BTreeMap<String, AnswerValue>,
+    data: DataValue,
     builtins: ScaffolderBuiltins,
 ) -> AnswerContext {
-    AnswerContext { answers, builtins }
+    AnswerContext {
+        answers,
+        data,
+        builtins,
+    }
 }
 
 /// choice 값을 매칭에 쓸 정규 문자열로 만든다. `List`는 choice 값으로 쓰이지 않는 스펙이라
@@ -221,7 +233,7 @@ mod tests {
         let mut answers = std::collections::BTreeMap::new();
         answers.insert("license".to_string(), AnswerValue::Text("MIT".to_string()));
 
-        let ctx = build_context(answers, builtins());
+        let ctx = build_context(answers, DataValue::empty_table(), builtins());
 
         assert_eq!(
             ctx.answer("license"),
