@@ -125,4 +125,13 @@ mod tests {
 
         assert!(evaluator.is_active("'ci' in nope", &ctx).is_err());
     }
+
+    #[test]
+    fn builtins_and_env_are_available_in_conditions() {
+        let ctx = ctx_with("edition", AnswerValue::Int(2021));
+        let evaluator = MiniJinjaConditionEvaluator::new();
+
+        assert!(evaluator.is_active("scaffolder.os == 'macos'", &ctx).unwrap());
+        assert!(evaluator.is_active("env('SC_DEFINITELY_ABSENT') == ''", &ctx).unwrap());
+    }
 }
