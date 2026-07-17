@@ -1,5 +1,6 @@
 //! MiniJinja `Environment` 구성(partials 등록·`scaffolder.*` 빌트인·`env()` 함수) — `Renderer`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -21,6 +22,18 @@ impl MiniJinjaRenderer {
         // 지키려면 보존해야 한다.
         env.set_keep_trailing_newline(true);
         Self { env }
+    }
+
+    /// partials를 명명 템플릿으로 등록해 `{% include "name" %}`가 pull할 수 있게 한다. include는
+    /// 등록된 이름만 해석하므로 `partials/` 밖 include는 불가능(미등록 이름=에러).
+    pub fn with_partials(partials: BTreeMap<String, String>) -> Result<Self> {
+        let mut env = base_environment();
+        env.set_keep_trailing_newline(true);
+        for (name, source) in partials {
+            env.add_template_owned(name, source)
+                .context("failed to register partial template")?;
+        }
+        Ok(Self { env })
     }
 }
 

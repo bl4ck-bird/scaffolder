@@ -6,6 +6,7 @@ pub mod source_root;
 pub mod data;
 pub mod ignore;
 pub mod answers;
+pub mod partials;
 
 use anyhow::{bail, Result};
 

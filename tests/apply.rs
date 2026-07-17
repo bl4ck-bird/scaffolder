@@ -751,3 +751,72 @@ fn apply_dry_run_omits_ignored_files_from_plan_output() {
 
     assert!(!target.exists(), "dry-run must not create the target directory");
 }
+
+#[test]
+fn apply_renders_partial_via_include() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(
+        template.path().join("scaffold.toml"),
+        r#"
+            [[questions]]
+            name = "project"
+            type = "string"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let partials = template.path().join("partials");
+    fs::create_dir_all(&partials).expect("mkdir partials");
+    fs::write(partials.join("header"), "# {{ project }} header").expect("write partial");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(
+        files.join("README.md.jinja"),
+        "{% include \"header\" %}\nbody",
+    )
+    .expect("write README.md.jinja");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo");
+
+    cmd.assert().success();
+
+    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    assert_eq!(readme, "# demo header\nbody");
+}
+
+#[test]
+fn apply_include_of_unregistered_partial_fails() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    // `partials/` 밖(또는 미등록) 이름 include는 등록 템플릿 조회에 실패해 렌더 에러.
+    fs::write(
+        files.join("out.txt.jinja"),
+        "{% include \"../escape\" %}",
+    )
+    .expect("write out.txt.jinja");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().failure();
+    assert!(
+        !target.join("out.txt").exists(),
+        "failed include must not produce output"
+    );
+}
