@@ -1,0 +1,12 @@
+# AI harness — local agent context, not committed
+.ai-harness/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Rust — 바이너리 crate이므로 Cargo.lock은 커밋한다 (ignore하지 않음)
+/target
+**/*.rs.bk
+
+# macOS
+.DS_Store
