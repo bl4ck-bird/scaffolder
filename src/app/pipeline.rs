@@ -1,7 +1,7 @@
-//! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → plan(부작용
-//! 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료 → write(overwrite/외부쓰기
-//! confirm 반영). `.scaffoldroot`·partials·data·hook은 이후 슬라이스에서 확장한다. 도메인
-//! 포트만 사용한다.
+//! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → data 병합(`[data]`+`data/*.toml`,
+//! §1.9 step 3) → plan(부작용 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료
+//! → write(overwrite/외부쓰기 confirm 반영). partials는 `Renderer` 포트에 주입되고,
+//! `.scaffoldroot`·hook은 이후 슬라이스에서 확장한다. 도메인 포트만 사용한다.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

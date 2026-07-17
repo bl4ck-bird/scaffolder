@@ -863,3 +863,71 @@ fn apply_exposes_merged_data_in_render_context() {
     let out = fs::read_to_string(target.join("out.txt")).expect("read out.txt");
     assert_eq!(out, "hi true\nrs,toml,");
 }
+
+#[test]
+fn apply_dedup_lines_over_included_partial() {
+    // §1.4 대표 시나리오: partial을 `{% include %}`로 조립한 결과를 `{% filter dedup_lines %}`로
+    // 중복 제거.
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let partials = template.path().join("partials");
+    fs::create_dir_all(&partials).expect("mkdir partials");
+    fs::write(partials.join("gitignore-docker"), "/target\n/docker-artifacts").expect("write partial");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(
+        files.join(".gitignore.jinja"),
+        "{% filter dedup_lines %}/target\n{% include \"gitignore-docker\" %}{% endfilter %}",
+    )
+    .expect("write .gitignore.jinja");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().success();
+
+    let gitignore = fs::read_to_string(target.join(".gitignore")).expect("read .gitignore");
+    assert_eq!(gitignore, "/target\n/docker-artifacts");
+}
+
+#[test]
+fn apply_when_cannot_reference_data() {
+    // §1.9: data는 answer 확정(step 2) 이후 병합(step 3)되므로 `when`은 data를 보지 못한다.
+    // 답변을 줘도 `when = "data.flag"`는 미정의 참조로 실패해야 한다(성공하면 when이 data를 본 것).
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(
+        template.path().join("scaffold.toml"),
+        r#"
+            [data]
+            flag = true
+
+            [[questions]]
+            name = "extra"
+            type = "string"
+            when = "data.flag"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("extra=given");
+
+    cmd.assert().failure();
+}
