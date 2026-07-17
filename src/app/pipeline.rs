@@ -1,6 +1,7 @@
 //! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → plan(부작용
-//! 없음) → dry-run이면 종료 → write(overwrite/외부쓰기 confirm 반영). `.scaffoldroot`·ignore·
-//! partials·data·hook은 이후 슬라이스에서 확장한다. 도메인 포트만 사용한다.
+//! 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료 → write(overwrite/외부쓰기
+//! confirm 반영). `.scaffoldroot`·partials·data·hook은 이후 슬라이스에서 확장한다. 도메인
+//! 포트만 사용한다.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ use crate::domain::answer::{
     ScaffolderBuiltins,
 };
 use crate::domain::hook::Confirmer;
+use crate::domain::ignore::IgnoreSource;
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
 use crate::domain::place::{safe_rel_path, FileMode, PayloadStore, RelPath};
@@ -46,6 +48,7 @@ pub struct ApplyPorts<'a> {
     pub confirmer: &'a dyn Confirmer,
     pub answer_source: &'a dyn AnswerSource,
     pub condition_evaluator: &'a dyn ConditionEvaluator,
+    pub ignore_source: &'a dyn IgnoreSource,
 }
 
 /// `resolve_answers`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
@@ -71,6 +74,7 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         &builtins,
     )?;
     let ctx = build_context(answers, builtins);
+    let matcher = ports.ignore_source.load(&req.template_root, &ctx)?;
 
     let files_root = req.template_root.join("files");
     let entries = ports.payload.list_entries(&files_root)?;
@@ -90,6 +94,9 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
             Some(parent) => parent.join(&parsed.output_base).to_string_lossy().into_owned(),
             None => parsed.output_base.clone(),
         };
+        if matcher.is_ignored(std::path::Path::new(&out_rel_str)) {
+            continue;
+        }
         let out_rel = safe_rel_path(&out_rel_str)?;
 
         if planned.iter().any(|p| p.rel == out_rel) {
@@ -233,6 +240,7 @@ mod tests {
     use super::*;
     use crate::domain::answer::AnswerContext;
     use crate::domain::hook::Confirmer;
+    use crate::domain::ignore::IgnoreMatcher;
     use crate::domain::manifest::Manifest;
     use crate::domain::place::{DestStatus, PayloadEntry};
     use std::cell::RefCell;
@@ -380,6 +388,29 @@ mod tests {
         }
     }
 
+    /// 고정된 rel 집합만 제외하는(또는 빈 집합이면 아무것도 제외하지 않는) 테스트용
+    /// `IgnoreSource`.
+    struct FakeIgnoreSource {
+        ignored: Vec<String>,
+    }
+    impl FakeIgnoreSource {
+        fn none() -> Self {
+            Self { ignored: Vec::new() }
+        }
+    }
+    impl IgnoreSource for FakeIgnoreSource {
+        fn load(&self, _template_root: &Path, _ctx: &AnswerContext) -> Result<Box<dyn IgnoreMatcher>> {
+            Ok(Box::new(FakeIgnoreMatcher(self.ignored.clone())))
+        }
+    }
+
+    struct FakeIgnoreMatcher(Vec<String>);
+    impl IgnoreMatcher for FakeIgnoreMatcher {
+        fn is_ignored(&self, rel: &Path) -> bool {
+            self.0.iter().any(|ignored| Path::new(ignored) == rel)
+        }
+    }
+
     fn string_question(name: &str, default: Option<&str>) -> Question {
         Question {
             name: name.to_string(),
@@ -429,6 +460,7 @@ mod tests {
                 confirmer: &FakeConfirmer { overwrite: true, external: true },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
             },
         )
         .expect("apply should succeed");
@@ -475,6 +507,7 @@ mod tests {
                 confirmer: &FakeConfirmer { overwrite: true, external: true },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
             },
         );
 
@@ -513,6 +546,7 @@ mod tests {
                 confirmer: &FakeConfirmer { overwrite: true, external: true },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
             },
         );
 
@@ -562,6 +596,7 @@ mod tests {
                 confirmer: &FakeConfirmer { overwrite: true, external: false },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
             },
         );
 
@@ -609,6 +644,7 @@ mod tests {
                 confirmer: &FakeConfirmer { overwrite: false, external: true },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
             },
         );
 

@@ -3,6 +3,7 @@
 use std::fs;
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 fn write_template(dir: &std::path::Path) {
@@ -471,4 +472,146 @@ fn apply_when_inactive_without_default_errors_if_template_references_it_uncondit
 
     // extra는 inactive이고 default가 없어 컨텍스트에서 부재한다; strict undefined로 렌더가 실패한다.
     cmd.assert().failure();
+}
+
+#[test]
+fn apply_static_scaffoldignore_excludes_matching_output_paths() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    fs::write(template.path().join(".scaffoldignore"), "*.tmp\n").expect("write .scaffoldignore");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+    fs::write(files.join("scratch.tmp"), "scratch").expect("write scratch.tmp");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().success();
+
+    assert!(target.join("keep.txt").exists(), "non-ignored file must be written");
+    assert!(
+        !target.join("scratch.tmp").exists(),
+        "ignored file must not be written"
+    );
+}
+
+#[test]
+fn apply_jinja_scaffoldignore_excludes_output_path_based_on_answers() {
+    fn write_docker_template(dir: &std::path::Path) {
+        fs::write(
+            dir.join("scaffold.toml"),
+            r#"
+                [[questions]]
+                name = "stacks"
+                type = "multiselect"
+                choices = ["docker"]
+                default = []
+            "#,
+        )
+        .expect("write scaffold.toml");
+        fs::write(
+            dir.join(".scaffoldignore.jinja"),
+            "{% if \"docker\" not in stacks %}Dockerfile{% endif %}\n",
+        )
+        .expect("write .scaffoldignore.jinja");
+        let files = dir.join("files");
+        fs::create_dir_all(&files).expect("mkdir files");
+        fs::write(files.join("Dockerfile"), "FROM scratch").expect("write Dockerfile");
+    }
+
+    // stacks에 docker 미포함: Dockerfile 제외.
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_docker_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path()).arg("apply").arg(template.path()).arg(&target);
+    cmd.assert().success();
+    assert!(
+        !target.join("Dockerfile").exists(),
+        "Dockerfile must be excluded when stacks lacks docker"
+    );
+
+    // stacks에 docker 포함: Dockerfile 배치.
+    let template2 = tempfile::tempdir().expect("template tempdir");
+    write_docker_template(template2.path());
+    let target2 = workdir.path().join("demo-docker");
+
+    let mut cmd2 = Command::cargo_bin("scaffolder").expect("binary");
+    cmd2.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template2.path())
+        .arg(&target2)
+        .arg("--answers")
+        .arg("stacks=docker");
+    cmd2.assert().success();
+    assert!(
+        target2.join("Dockerfile").exists(),
+        "Dockerfile must be placed when stacks includes docker"
+    );
+}
+
+#[test]
+fn apply_scaffoldignore_matches_rendered_output_name_not_source_name() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    fs::write(template.path().join(".scaffoldignore"), "*.tmp\n").expect("write .scaffoldignore");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    // 소스명은 .tmp.jinja로 끝나 *.tmp에 매치되지 않지만, 렌더된 출력명 config.tmp는 매치된다.
+    fs::write(files.join("config.tmp.jinja"), "rendered").expect("write config.tmp.jinja");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().success();
+
+    assert!(
+        !target.join("config.tmp").exists(),
+        "output name config.tmp must be excluded by *.tmp even though source is config.tmp.jinja"
+    );
+    assert!(target.join("keep.txt").exists(), "non-ignored file must be written");
+}
+
+#[test]
+fn apply_dry_run_omits_ignored_files_from_plan_output() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    fs::write(template.path().join(".scaffoldignore"), "*.tmp\n").expect("write .scaffoldignore");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+    fs::write(files.join("scratch.tmp"), "scratch").expect("write scratch.tmp");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--dry-run");
+
+    cmd.assert()
+        .success()
+        .stdout(contains("keep.txt"))
+        .stdout(contains("scratch.tmp").not());
+
+    assert!(!target.exists(), "dry-run must not create the target directory");
 }

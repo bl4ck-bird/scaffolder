@@ -14,6 +14,7 @@ use crate::cli::confirm::StdConfirmer;
 use crate::cli::prompt::InquireAnswerSource;
 use crate::domain::answer::ScaffolderBuiltins;
 use crate::infra::load::answers::load_answers_file;
+use crate::infra::load::ignore::FsIgnoreSource;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::place::FsPayloadStore;
 use crate::infra::render::expr::MiniJinjaConditionEvaluator;
@@ -93,6 +94,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let confirmer = StdConfirmer::new(args.force);
     let answer_source = InquireAnswerSource;
     let condition_evaluator = MiniJinjaConditionEvaluator::new();
+    let ignore_source = FsIgnoreSource::new(&renderer);
 
     let report = apply(
         &req,
@@ -104,6 +106,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
             confirmer: &confirmer,
             answer_source: &answer_source,
             condition_evaluator: &condition_evaluator,
+            ignore_source: &ignore_source,
         },
     )?;
 
