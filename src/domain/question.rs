@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use anyhow::{bail, Result};
 
-use crate::domain::answer::AnswerValue;
+use crate::domain::answer::{canonical_string, AnswerValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionType {
@@ -68,9 +68,121 @@ pub fn validate_unique_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Re
     Ok(())
 }
 
+/// select/multiselect choice 값이 콤마·공백을 포함하지 않는지, 그리고 multiselect choice가
+/// 문자열 값만 쓰는지(현재 `AnswerValue::List`가 원소 타입을 보존하지 못하므로) 검증한다.
+/// choices가 없는 타입은 항상 Ok.
+pub fn validate_choices(question: &Question) -> Result<()> {
+    match question.qtype {
+        QuestionType::Select | QuestionType::Multiselect => {
+            for choice in &question.choices {
+                let s = canonical_string(&choice.value);
+                if s.contains(',') || s.chars().any(char::is_whitespace) {
+                    bail!(
+                        "question {:?} has a choice value {s:?} containing a comma or whitespace, which is not allowed",
+                        question.name
+                    );
+                }
+                if question.qtype == QuestionType::Multiselect
+                    && !matches!(choice.value, AnswerValue::Text(_))
+                {
+                    bail!(
+                        "question {:?} is multiselect but has a non-string choice value {s:?}: multiselect choices must be strings in this version",
+                        question.name
+                    );
+                }
+            }
+            Ok(())
+        }
+        QuestionType::String | QuestionType::Int | QuestionType::Float | QuestionType::Boolean => {
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::answer::AnswerValue;
+
+    fn question(qtype: QuestionType, choices: Vec<Choice>) -> Question {
+        Question {
+            name: "q".to_string(),
+            qtype,
+            prompt: None,
+            choices,
+            default: None,
+            when: None,
+            help: None,
+        }
+    }
+
+    #[test]
+    fn validate_choices_rejects_comma_in_choice_value() {
+        let choices = vec![Choice {
+            label: "a,b".to_string(),
+            value: AnswerValue::Text("a,b".to_string()),
+        }];
+        let q = question(QuestionType::Select, choices);
+        assert!(validate_choices(&q).is_err());
+    }
+
+    #[test]
+    fn validate_choices_rejects_whitespace_in_choice_value() {
+        let choices = vec![Choice {
+            label: "a b".to_string(),
+            value: AnswerValue::Text("a b".to_string()),
+        }];
+        let q = question(QuestionType::Multiselect, choices);
+        assert!(validate_choices(&q).is_err());
+    }
+
+    #[test]
+    fn validate_choices_accepts_clean_select_choices() {
+        let choices = vec![
+            Choice {
+                label: "MIT".to_string(),
+                value: AnswerValue::Text("MIT".to_string()),
+            },
+            Choice {
+                label: "2021".to_string(),
+                value: AnswerValue::Int(2021),
+            },
+        ];
+        let q = question(QuestionType::Select, choices);
+        assert!(validate_choices(&q).is_ok());
+    }
+
+    #[test]
+    fn validate_choices_rejects_non_string_multiselect_choice() {
+        let choices = vec![Choice {
+            label: "1".to_string(),
+            value: AnswerValue::Int(1),
+        }];
+        let q = question(QuestionType::Multiselect, choices);
+        assert!(validate_choices(&q).is_err());
+    }
+
+    #[test]
+    fn validate_choices_accepts_string_multiselect_choices() {
+        let choices = vec![
+            Choice {
+                label: "docker".to_string(),
+                value: AnswerValue::Text("docker".to_string()),
+            },
+            Choice {
+                label: "ci".to_string(),
+                value: AnswerValue::Text("ci".to_string()),
+            },
+        ];
+        let q = question(QuestionType::Multiselect, choices);
+        assert!(validate_choices(&q).is_ok());
+    }
+
+    #[test]
+    fn validate_choices_is_noop_for_types_without_choices() {
+        let q = question(QuestionType::String, vec![]);
+        assert!(validate_choices(&q).is_ok());
+    }
 
     #[test]
     fn accepts_valid_identifier_name() {
