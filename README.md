@@ -60,10 +60,24 @@ Apply a template to a new directory:
 scaffolder apply my-template ./demo --answers project=demo
 ```
 
+The template argument is either a path to a local template directory or the
+name of a template in a store. A name is looked up as
+`<store>/<name>/scaffold.toml`, searching, in order: the `--template-dir`
+override, `$SCAFFOLDER_HOME`, `$XDG_CONFIG_HOME/scaffolder`, and
+`~/.scaffolder`.
+
 Answers for any question without a supplied value fall back to its
 `default`; a question with no default and no supplied answer is an error,
 unless you're at an interactive terminal, in which case you'll be prompted
 for it.
+
+A question may carry a `when` expression referencing earlier answers (for
+example `when = "'ci' in stacks"`); when it evaluates false the question is
+skipped and its default, if any, is used.
+
+A `.scaffoldignore` file (or `.scaffoldignore.jinja`, rendered with the
+answers) lists gitignore-style patterns for output paths to leave out of
+the generated project.
 
 ### Flags
 
@@ -75,6 +89,7 @@ for it.
 | `--defaults` | use each question's default without prompting; fails if a question has no default |
 | `--force` | overwrite existing files in the target without prompting |
 | `--dry-run` | print the write plan without touching the filesystem |
+| `--template-dir <path>` | directory to resolve a template name against, before the default store locations |
 
 Running without `--force` against an existing file fails unless you are at
 an interactive terminal and confirm the overwrite.

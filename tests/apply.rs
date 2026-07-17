@@ -23,6 +23,142 @@ fn write_template(dir: &std::path::Path) {
     fs::write(files.join("src/main.rs"), "fn main(){}").expect("write src/main.rs");
 }
 
+/// `store_dir/name`에 조회 가능한 스토어 템플릿을 만든다.
+fn write_store_template(store_dir: &std::path::Path, name: &str) {
+    let template_dir = store_dir.join(name);
+    fs::create_dir_all(&template_dir).expect("mkdir store template dir");
+    write_template(&template_dir);
+}
+
+/// 질문 없이 `files/marker.txt`(내용=`marker`)만 배치하는 최소 템플릿 — 두 후보 템플릿 중
+/// 어느 쪽이 실제로 적용됐는지 배치된 파일 내용으로 구분하기 위함.
+fn write_marker_template(dir: &std::path::Path, marker: &str) {
+    fs::write(dir.join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), marker).expect("write marker.txt");
+}
+
+#[test]
+fn apply_template_dir_resolves_store_name_and_writes_files() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    write_store_template(store_dir.path(), "mystore");
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
+        .arg("apply")
+        .arg("mystore")
+        .arg(&target)
+        .arg("--template-dir")
+        .arg(store_dir.path())
+        .arg("--answers")
+        .arg("project=demo");
+
+    cmd.assert().success();
+
+    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    assert_eq!(readme, "# demo");
+
+    let main_rs = fs::read_to_string(target.join("src/main.rs")).expect("read src/main.rs");
+    assert_eq!(main_rs, "fn main(){}");
+}
+
+#[test]
+fn apply_template_dir_missing_store_name_fails_with_searched_locations() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    // Isolated stand-in for the developer's real home so an ambient ~/.scaffolder/ghost
+    // can't make this "missing" case unexpectedly resolve.
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
+        .env("HOME", fake_home.path())
+        .arg("apply")
+        .arg("ghost")
+        .arg(&target)
+        .arg("--template-dir")
+        .arg(store_dir.path());
+
+    cmd.assert()
+        .failure()
+        .stderr(contains("ghost"))
+        .stderr(contains(store_dir.path().to_str().expect("utf8 path")));
+
+    assert!(!target.exists(), "missing template must not create the target directory");
+}
+
+/// 회귀: bare 스토어 이름이 CWD의 동명 디렉토리에 가려지면 `--template-dir`가 조용히
+/// 우회된다 — store 체인이 CWD 셰도잉보다 우선해야 한다.
+#[test]
+fn apply_bare_store_name_wins_over_cwd_shadow_directory() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let store_template = store_dir.path().join("shared");
+    fs::create_dir_all(&store_template).expect("mkdir store template dir");
+    write_marker_template(&store_template, "store");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let local_shadow = workdir.path().join("shared");
+    fs::create_dir_all(&local_shadow).expect("mkdir local shadow dir");
+    write_marker_template(&local_shadow, "local");
+
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
+        .arg("apply")
+        .arg("shared")
+        .arg(&target)
+        .arg("--template-dir")
+        .arg(store_dir.path());
+
+    cmd.assert().success();
+
+    let marker = fs::read_to_string(target.join("marker.txt")).expect("read marker.txt");
+    assert_eq!(
+        marker, "store",
+        "--template-dir store must win over a CWD directory sharing the bare template name"
+    );
+}
+
+/// bare 이름이 어느 store에도 없으면 CWD 기준 동명 디렉토리로 fallback한다(기존 호환).
+#[test]
+fn apply_bare_name_falls_back_to_cwd_directory_when_absent_from_stores() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    let local_template = workdir.path().join("localtpl");
+    fs::create_dir_all(&local_template).expect("mkdir local template dir");
+    write_marker_template(&local_template, "local");
+
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
+        .env("HOME", fake_home.path())
+        .arg("apply")
+        .arg("localtpl")
+        .arg(&target)
+        .arg("--template-dir")
+        .arg(store_dir.path());
+
+    cmd.assert().success();
+
+    let marker = fs::read_to_string(target.join("marker.txt")).expect("read marker.txt");
+    assert_eq!(marker, "local");
+}
+
 #[test]
 fn apply_renders_and_writes_files() {
     let template = tempfile::tempdir().expect("template tempdir");
