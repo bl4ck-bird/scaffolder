@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::domain::answer::AnswerValue;
+use crate::domain::hook::{Hook, Hooks};
 use crate::domain::manifest::{Manifest, ManifestSource};
 use crate::domain::question::{
     validate_choices, validate_question_name, validate_unique_names, Choice, Question,
@@ -32,6 +33,40 @@ struct RawManifest {
     questions: Vec<RawQuestion>,
     #[serde(default)]
     data: toml::value::Table,
+    #[serde(default)]
+    hooks: RawHooks,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawHooks {
+    #[serde(default)]
+    before: Vec<RawHook>,
+    #[serde(default)]
+    after: Vec<RawHook>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawHook {
+    run: String,
+    when: Option<String>,
+}
+
+impl From<RawHook> for Hook {
+    fn from(raw: RawHook) -> Self {
+        Hook {
+            when: raw.when,
+            run: raw.run,
+        }
+    }
+}
+
+impl From<RawHooks> for Hooks {
+    fn from(raw: RawHooks) -> Self {
+        Hooks {
+            before: raw.before.into_iter().map(Hook::from).collect(),
+            after: raw.after.into_iter().map(Hook::from).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,8 +94,13 @@ fn parse_manifest(text: &str) -> Result<Manifest> {
     validate_unique_names(questions.iter().map(|q| q.name.as_str()))?;
 
     let data = toml_to_data_value(&toml::Value::Table(raw.data));
+    let hooks = Hooks::from(raw.hooks);
 
-    Ok(Manifest { questions, data })
+    Ok(Manifest {
+        questions,
+        data,
+        hooks,
+    })
 }
 
 impl RawQuestion {
@@ -276,5 +316,54 @@ mod tests {
     fn load_reports_missing_file() {
         let path = Path::new("/nonexistent/scaffold.toml");
         assert!(TomlManifestSource.load(path).is_err());
+    }
+
+    #[test]
+    fn parses_before_and_after_hooks() {
+        let toml = r#"
+            [[hooks.before]]
+            run = "cargo init"
+
+            [[hooks.after]]
+            when = "'docker' in stacks"
+            run = "git init"
+        "#;
+
+        let manifest = parse_manifest(toml).expect("manifest should parse");
+
+        assert_eq!(manifest.hooks.before.len(), 1);
+        assert_eq!(manifest.hooks.before[0].run, "cargo init");
+        assert_eq!(manifest.hooks.before[0].when, None);
+
+        assert_eq!(manifest.hooks.after.len(), 1);
+        assert_eq!(manifest.hooks.after[0].run, "git init");
+        assert_eq!(
+            manifest.hooks.after[0].when,
+            Some("'docker' in stacks".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_hook_missing_run() {
+        let toml = r#"
+            [[hooks.before]]
+            when = "true"
+        "#;
+
+        assert!(parse_manifest(toml).is_err());
+    }
+
+    #[test]
+    fn defaults_to_empty_hooks_when_not_declared() {
+        let toml = r#"
+            [[questions]]
+            name = "license"
+            type = "string"
+        "#;
+
+        let manifest = parse_manifest(toml).expect("manifest should parse");
+
+        assert!(manifest.hooks.before.is_empty());
+        assert!(manifest.hooks.after.is_empty());
     }
 }

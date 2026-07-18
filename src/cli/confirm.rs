@@ -7,15 +7,18 @@ use crate::domain::hook::Confirmer;
 
 /// tty 프롬프트 기반 `Confirmer`. `force`는 overwrite 전용 게이트다 — 대화형일 때만
 /// 프롬프트하고 비대화형은 거부한다(미승인 write는 에러로 이어져야 하는 보안 표면).
+/// `yes`는 훅 confirm 전용 우회다 — overwrite/외부쓰기에는 관여하지 않는다.
 pub struct StdConfirmer {
     pub force: bool,
     pub interactive: bool,
+    pub yes: bool,
 }
 
 impl StdConfirmer {
-    pub fn new(force: bool) -> Self {
+    pub fn new(force: bool, yes: bool) -> Self {
         Self {
             force,
+            yes,
             interactive: io::stdin().is_terminal(),
         }
     }
@@ -41,9 +44,11 @@ impl StdConfirmer {
 }
 
 impl Confirmer for StdConfirmer {
-    fn confirm_hook(&self, _description: &str) -> bool {
-        // 현재는 훅을 실행하지 않는다(이후 실제 confirm 프롬프트로 대체 예정).
-        self.force || self.interactive
+    fn confirm_hook(&self, description: &str) -> bool {
+        if self.yes {
+            return true;
+        }
+        self.tty_prompt(&format!("run hook: {description}?"))
     }
 
     fn confirm_overwrite(&self, path: &Path) -> bool {
@@ -65,15 +70,36 @@ mod tests {
 
     #[test]
     fn force_does_not_approve_external_write() {
-        let confirmer = StdConfirmer { force: true, interactive: false };
+        let confirmer = StdConfirmer { force: true, interactive: false, yes: false };
 
         assert!(!confirmer.confirm_external_write(Path::new("/outside/file.txt")));
     }
 
     #[test]
     fn force_still_approves_overwrite() {
-        let confirmer = StdConfirmer { force: true, interactive: false };
+        let confirmer = StdConfirmer { force: true, interactive: false, yes: false };
 
         assert!(confirmer.confirm_overwrite(Path::new("/target/file.txt")));
+    }
+
+    #[test]
+    fn force_does_not_approve_hook_confirm() {
+        let confirmer = StdConfirmer { force: true, interactive: false, yes: false };
+
+        assert!(!confirmer.confirm_hook("run setup script"));
+    }
+
+    #[test]
+    fn yes_bypasses_hook_confirm() {
+        let confirmer = StdConfirmer { force: false, interactive: false, yes: true };
+
+        assert!(confirmer.confirm_hook("run setup script"));
+    }
+
+    #[test]
+    fn non_interactive_without_yes_rejects_hook_confirm() {
+        let confirmer = StdConfirmer { force: false, interactive: false, yes: false };
+
+        assert!(!confirmer.confirm_hook("run setup script"));
     }
 }

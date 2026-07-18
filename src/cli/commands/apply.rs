@@ -20,6 +20,7 @@ use crate::infra::load::ignore::FsIgnoreSource;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::load::partials::FsPartialSource;
 use crate::infra::load::source_root::FsSourceRootSource;
+use crate::infra::hook::{FsHookSource, StdHookRunner};
 use crate::infra::load::store::FsTemplateStore;
 use crate::infra::place::FsPayloadStore;
 use crate::infra::render::expr::MiniJinjaConditionEvaluator;
@@ -49,6 +50,9 @@ pub struct ApplyArgs {
     /// 기존 dest를 자동으로 덮어쓴다.
     #[arg(long)]
     pub force: bool,
+    /// 훅 confirm을 생략한다.
+    #[arg(long)]
+    pub yes: bool,
     /// plan만 출력하고 쓰지 않는다.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
@@ -102,10 +106,12 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let partials = FsPartialSource.load(&req.template_root)?;
     let renderer = MiniJinjaRenderer::with_partials(partials)?;
     let payload = FsPayloadStore;
-    let confirmer = StdConfirmer::new(args.force);
+    let confirmer = StdConfirmer::new(args.force, args.yes);
     let answer_source = InquireAnswerSource;
     let condition_evaluator = MiniJinjaConditionEvaluator::new();
     let ignore_source = FsIgnoreSource::new(&renderer);
+    let hook_source = FsHookSource;
+    let hook_runner = StdHookRunner;
 
     let report = apply(
         &req,
@@ -119,6 +125,8 @@ pub fn run(args: ApplyArgs) -> Result<()> {
             answer_source: &answer_source,
             condition_evaluator: &condition_evaluator,
             ignore_source: &ignore_source,
+            hook_source: &hook_source,
+            hook_runner: &hook_runner,
         },
     )?;
 

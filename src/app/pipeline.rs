@@ -1,19 +1,21 @@
 //! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → data 병합(`[data]`+`data/*.toml`,
 //! §1.9 step 3) → plan(부작용 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료
-//! → write(overwrite/외부쓰기 confirm 반영). partials는 `Renderer` 포트에 주입되고,
-//! `.scaffoldroot`·hook은 이후 슬라이스에서 확장한다. 도메인 포트만 사용한다.
+//! → 훅 confirm(부작용 전 단일 게이트, §1.9-5) → before 훅 → write(overwrite/외부쓰기 confirm
+//! 반영) → after 훅. partials는 `Renderer` 포트에 주입된다. 훅 오케스트레이션은 `app::hooks`가
+//! 맡고 여기는 포트 배선만 한다. 도메인 포트만 사용한다.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
+use crate::app::hooks::{collect_active_inline, confirm_description, run_phase};
 use crate::domain::answer::{
     build_context, coerce, validate_choice, AnswerSource, AnswerValue, ConditionEvaluator,
     ScaffolderBuiltins,
 };
 use crate::domain::data::DataSource;
-use crate::domain::hook::Confirmer;
+use crate::domain::hook::{hook_env, Confirmer, HookPhase, HookRunner, HookSource};
 use crate::domain::ignore::IgnoreSource;
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
@@ -52,6 +54,8 @@ pub struct ApplyPorts<'a> {
     pub answer_source: &'a dyn AnswerSource,
     pub condition_evaluator: &'a dyn ConditionEvaluator,
     pub ignore_source: &'a dyn IgnoreSource,
+    pub hook_source: &'a dyn HookSource,
+    pub hook_runner: &'a dyn HookRunner,
 }
 
 /// `resolve_answers`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
@@ -76,6 +80,9 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         },
         &builtins,
     )?;
+
+    // answers는 build_context에 이동되기 전에 훅 env로 스냅샷해 둔다(§67).
+    let hook_env_map = hook_env(&answers);
 
     // §1.9 step 3: answer 확정 이후 data를 병합한다. `[data]`(manifest)를 base로 `data/*.toml`을
     // lexical 순서로 fold한다(단일 left-fold — §1.5).
@@ -131,9 +138,38 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         return Ok(ApplyReport { planned });
     }
 
+    // dry-run 이후에만 훅을 수집한다 — dry-run은 훅과 무관하다.
+    let before_inline = collect_active_inline(&manifest.hooks.before, &ctx, ports.condition_evaluator)?;
+    let after_inline = collect_active_inline(&manifest.hooks.after, &ctx, ports.condition_evaluator)?;
+    let before_scripts = ports.hook_source.scripts(&req.template_root, HookPhase::Before)?;
+    let after_scripts = ports.hook_source.scripts(&req.template_root, HookPhase::After)?;
+
+    let has_hooks = !before_inline.is_empty()
+        || !before_scripts.is_empty()
+        || !after_inline.is_empty()
+        || !after_scripts.is_empty();
+
+    // §1.9-5: before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
+    if has_hooks {
+        let description = confirm_description(&before_inline, &before_scripts, &after_inline, &after_scripts);
+        if !ports.confirmer.confirm_hook(&description) {
+            bail!("hook execution was not confirmed; aborting before any writes");
+        }
+    }
+
     // §1.9 step 6: target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
     // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
     ports.payload.ensure_target(&req.target_root)?;
+
+    run_phase(
+        ports.hook_runner,
+        ports.renderer,
+        &ctx,
+        &before_inline,
+        &before_scripts,
+        &req.target_root,
+        &hook_env_map,
+    )?;
 
     for planned_write in &planned {
         let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
@@ -163,6 +199,16 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
             status.exists,
         )?;
     }
+
+    run_phase(
+        ports.hook_runner,
+        ports.renderer,
+        &ctx,
+        &after_inline,
+        &after_scripts,
+        &req.target_root,
+        &hook_env_map,
+    )?;
 
     Ok(ApplyReport { planned })
 }
@@ -254,7 +300,7 @@ fn resolve_answers(
 mod tests {
     use super::*;
     use crate::domain::answer::AnswerContext;
-    use crate::domain::hook::Confirmer;
+    use crate::domain::hook::{Confirmer, HookPhase, HookRunner, HookScript, HookSource};
     use crate::domain::ignore::IgnoreMatcher;
     use crate::domain::manifest::Manifest;
     use crate::domain::place::{DestStatus, PayloadEntry};
@@ -311,6 +357,59 @@ mod tests {
         }
         fn confirm_external_write(&self, _path: &Path) -> bool {
             self.external
+        }
+    }
+
+    /// 훅 confirm을 항상 거절하는 테스트용 `Confirmer` — 나머지 게이트는 `FakeConfirmer`와 동일하게
+    /// 항상 승인한다(이 게이트만 격리 검증하기 위함).
+    struct DecliningHookConfirmer;
+    impl Confirmer for DecliningHookConfirmer {
+        fn confirm_hook(&self, _description: &str) -> bool {
+            false
+        }
+        fn confirm_overwrite(&self, _path: &Path) -> bool {
+            true
+        }
+        fn confirm_external_write(&self, _path: &Path) -> bool {
+            true
+        }
+    }
+
+    /// 폴더 스크립트가 없는(빈) 테스트용 `HookSource`.
+    struct FakeHookSource;
+    impl HookSource for FakeHookSource {
+        fn scripts(&self, _template_root: &Path, _phase: HookPhase) -> Result<Vec<HookScript>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// 실제 프로세스를 실행하지 않고 호출만 기록하는 테스트용 `HookRunner`.
+    struct FakeHookRunner {
+        calls: RefCell<Vec<String>>,
+    }
+    impl FakeHookRunner {
+        fn new() -> Self {
+            Self { calls: RefCell::new(Vec::new()) }
+        }
+    }
+    impl HookRunner for FakeHookRunner {
+        fn run_inline(&self, command: &str, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+            self.calls.borrow_mut().push(format!("inline:{command}"));
+            Ok(())
+        }
+        fn run_script_file(&self, path: &Path, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+            self.calls.borrow_mut().push(format!("script:{}", path.display()));
+            Ok(())
+        }
+        fn run_rendered(
+            &self,
+            name: &str,
+            _content: &[u8],
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
+            self.calls.borrow_mut().push(format!("rendered:{name}"));
+            Ok(())
         }
     }
 
@@ -494,6 +593,8 @@ mod tests {
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
             },
         )
         .expect("apply should succeed");
@@ -545,6 +646,8 @@ mod tests {
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
             },
         );
 
@@ -586,6 +689,8 @@ mod tests {
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
             },
         );
 
@@ -640,6 +745,8 @@ mod tests {
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
             },
         );
 
@@ -692,6 +799,8 @@ mod tests {
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
             },
         );
 
@@ -1055,5 +1164,106 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn hook_present_and_confirm_declined_aborts_before_any_write_or_target_creation() {
+        let manifest = Manifest {
+            questions: vec![],
+            hooks: crate::domain::hook::Hooks {
+                before: vec![crate::domain::hook::Hook { when: None, run: "echo should-not-run".to_string() }],
+                after: vec![],
+            },
+            ..Default::default()
+        };
+        let store = FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+        };
+        let runner = FakeHookRunner::new();
+
+        let req = ApplyRequest {
+            template_root: PathBuf::from("/tpl"),
+            target_root: PathBuf::from("/target"),
+            answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
+            dry_run: false,
+        };
+
+        let result = apply(
+            &req,
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &DecliningHookConfirmer,
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &runner,
+            },
+        );
+
+        assert!(result.is_err(), "declined hook confirm must abort");
+        assert!(store.written.borrow().is_empty(), "no write must happen before hook confirm");
+        assert!(runner.calls.borrow().is_empty(), "hook must not run when confirm is declined");
+    }
+
+    #[test]
+    fn dry_run_skips_hook_confirm_and_execution_even_when_hooks_are_declared() {
+        let manifest = Manifest {
+            questions: vec![],
+            hooks: crate::domain::hook::Hooks {
+                before: vec![crate::domain::hook::Hook { when: None, run: "echo should-not-run".to_string() }],
+                after: vec![],
+            },
+            ..Default::default()
+        };
+        let store = FakePayloadStore {
+            entries: vec![],
+            contents: HashMap::new(),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+        };
+        let runner = FakeHookRunner::new();
+
+        let req = ApplyRequest {
+            template_root: PathBuf::from("/tpl"),
+            target_root: PathBuf::from("/target"),
+            answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
+            dry_run: true,
+        };
+
+        let report = apply(
+            &req,
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                // dry-run이 훅 collection·confirm 자체를 건너뛴다면 거절 confirmer라도 무해해야 한다.
+                confirmer: &DecliningHookConfirmer,
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &runner,
+            },
+        )
+        .expect("dry-run must succeed even though hook confirm would be declined");
+
+        assert!(report.planned.is_empty());
+        assert!(runner.calls.borrow().is_empty(), "dry-run must not execute hooks");
     }
 }

@@ -1097,3 +1097,250 @@ fn apply_force_replaces_existing_external_symlink_dest_in_place() {
     );
     assert_eq!(fs::read_to_string(&external).unwrap(), "SECRET", "external target must be untouched");
 }
+
+/// `project` 질문 + 인라인 before 훅(`$SCAFFOLDER_PROJECT`를 `hook-out.txt`에 씀)이 있는 템플릿.
+fn write_hook_env_template(dir: &std::path::Path) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[questions]]
+            name = "project"
+            type = "string"
+
+            [[hooks.before]]
+            run = "echo $SCAFFOLDER_PROJECT > hook-out.txt"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+}
+
+#[test]
+fn apply_inline_before_hook_runs_with_env_and_cwd_when_yes() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_hook_env_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo")
+        .arg("--yes");
+
+    cmd.assert().success();
+
+    let out = fs::read_to_string(target.join("hook-out.txt")).expect("read hook-out.txt");
+    assert_eq!(out.trim(), "demo", "hook must see SCAFFOLDER_PROJECT env and run with cwd=target");
+}
+
+#[test]
+fn apply_inline_hook_when_false_is_skipped() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(
+        template.path().join("scaffold.toml"),
+        r#"
+            [[hooks.before]]
+            when = "false"
+            run = "echo ran > hook-out.txt"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+
+    cmd.assert().success();
+
+    assert!(
+        !target.join("hook-out.txt").exists(),
+        "when=false inline hook must not run"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_inline_hooks_run_before_folder_hooks_in_declaration_and_lexical_order() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(
+        template.path().join("scaffold.toml"),
+        r#"
+            [[hooks.before]]
+            run = "echo a >> order.txt"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let hooks_before = template.path().join("hooks/before");
+    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
+    let script_path = hooks_before.join("z.sh");
+    fs::write(&script_path, "#!/bin/sh\necho b >> order.txt\n").expect("write z.sh");
+    let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).expect("chmod +x z.sh");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+
+    cmd.assert().success();
+
+    let order = fs::read_to_string(target.join("order.txt")).expect("read order.txt");
+    assert_eq!(order, "a\nb\n", "inline hooks must run before folder hooks (lexical)");
+}
+
+#[test]
+fn apply_hook_confirm_required_without_yes_fails_noninteractively_with_no_side_effects() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_hook_env_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo");
+
+    // assert_cmd 실행은 기본적으로 비-tty다; --yes 없이 훅이 있으면 confirm이 거절되어 에러여야 한다.
+    cmd.assert().failure();
+
+    assert!(
+        !target.exists(),
+        "unconfirmed hook must abort before target creation (no side effects)"
+    );
+}
+
+/// `project` 질문 + `.jinja` 폴더훅(`hooks/before/10-gen.sh.jinja`, `{{ project }}`를
+/// `rendered-hook-out.txt`에 씀)이 있는 템플릿.
+fn write_jinja_folder_hook_template(dir: &std::path::Path) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[questions]]
+            name = "project"
+            type = "string"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let hooks_before = dir.join("hooks/before");
+    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
+    fs::write(
+        hooks_before.join("10-gen.sh.jinja"),
+        "#!/bin/sh\necho \"{{ project }}\" > rendered-hook-out.txt\n",
+    )
+    .expect("write 10-gen.sh.jinja");
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+}
+
+/// E2E 회귀: `.jinja` 폴더훅은 실제 MiniJinja 렌더 → temp 파일 → exec 체인을 answer 컨텍스트로
+/// 거쳐야 한다(piecewise 단위테스트만으로는 렌더 컨텍스트가 실제로 전달되는지 증명되지 않는다).
+#[test]
+fn apply_jinja_folder_hook_renders_with_answer_context_and_executes() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_jinja_folder_hook_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo")
+        .arg("--yes");
+
+    cmd.assert().success();
+
+    let out = fs::read_to_string(target.join("rendered-hook-out.txt")).expect("read rendered-hook-out.txt");
+    assert_eq!(out.trim(), "demo", "jinja folder hook must render with answer context and execute");
+}
+
+/// payload 파일(`files/marker.txt` = "payload") + after 훅(`cat marker.txt`)이 있는 템플릿.
+fn write_after_hook_observes_payload_template(dir: &std::path::Path) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[hooks.after]]
+            run = "cat marker.txt > after-saw.txt"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "payload").expect("write marker.txt");
+}
+
+/// E2E 회귀: after 훅은 write 이후에 실행되므로 payload로 배치된 파일을 실제로 읽을 수 있어야
+/// 한다(지금까지는 순서가 구조적으로만 증명되었다).
+#[test]
+fn apply_after_hook_observes_written_payload_file() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_after_hook_observes_payload_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+
+    cmd.assert().success();
+
+    let out = fs::read_to_string(target.join("after-saw.txt")).expect("read after-saw.txt");
+    assert_eq!(out.trim(), "payload", "after hook must observe the already-written payload file");
+}
+
+#[test]
+fn apply_dry_run_skips_hook_confirm_and_execution() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_hook_env_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo")
+        .arg("--dry-run");
+
+    // --yes 없이도 dry-run은 confirm·훅 실행 자체를 생략하므로 성공해야 한다.
+    cmd.assert().success();
+
+    assert!(!target.exists(), "dry-run must not create the target directory or run hooks");
+}
