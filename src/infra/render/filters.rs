@@ -44,7 +44,10 @@ fn dedup_lines(input: &str) -> String {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut kept: Vec<&str> = Vec::new();
     for line in input.split('\n') {
-        if line.is_empty() || seen.insert(line) {
+        // CRLF payload는 라인 끝에 `\r`을 남긴다. dedup 키에서 `\r`을 제외해 LF/CRLF 혼재
+        // (예: LF payload + CRLF partial)에서도 같은 라인으로 취급한다. 출력은 원본을 보존한다.
+        let key = line.strip_suffix('\r').unwrap_or(line);
+        if key.is_empty() || seen.insert(key) {
             kept.push(line);
         }
     }
@@ -97,6 +100,12 @@ mod tests {
     #[test]
     fn dedup_lines_preserves_blank_lines() {
         assert_eq!(dedup_lines("a\n\nb\n\na\n"), "a\n\nb\n\n");
+    }
+
+    #[test]
+    fn dedup_lines_treats_crlf_and_lf_as_same_line() {
+        // CRLF `/target\r`와 LF `/target`은 같은 라인으로 dedup되고, 출력은 첫 등장(원본)을 보존한다.
+        assert_eq!(dedup_lines("/target\r\n/target\n/log"), "/target\r\n/log");
     }
 
     #[test]
