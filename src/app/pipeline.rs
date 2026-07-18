@@ -1,6 +1,6 @@
-//! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → data 병합(`[data]`+`data/*.toml`,
-//! §1.9 step 3) → plan(부작용 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료
-//! → 훅 confirm(부작용 전 단일 게이트, §1.9-5) → before 훅 → write(overwrite/외부쓰기 confirm
+//! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → data 병합(`[data]`+`data/*.toml`)
+//! → plan(부작용 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료
+//! → 훅 confirm(부작용 전 단일 게이트) → before 훅 → write(overwrite/외부쓰기 confirm
 //! 반영) → after 훅. partials는 `Renderer` 포트에 주입된다. 훅 오케스트레이션은 `app::hooks`가
 //! 맡고 여기는 포트 배선만 한다. 도메인 포트만 사용한다.
 
@@ -81,11 +81,11 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         &builtins,
     )?;
 
-    // answers는 build_context에 이동되기 전에 훅 env로 스냅샷해 둔다(§67).
+    // answers는 build_context에 이동되기 전에 훅 env로 스냅샷해 둔다.
     let hook_env_map = hook_env(&answers);
 
-    // §1.9 step 3: answer 확정 이후 data를 병합한다. `[data]`(manifest)를 base로 `data/*.toml`을
-    // lexical 순서로 fold한다(단일 left-fold — §1.5).
+    // answer 확정 이후 data를 병합한다. `[data]`(manifest)를 base로 `data/*.toml`을
+    // lexical 순서로 fold한다(단일 left-fold).
     let data = ports.data_source.load(&req.template_root, manifest.data)?;
     let ctx = build_context(answers, Some(data), builtins);
     let matcher = ports.ignore_source.load(&req.template_root, &ctx)?;
@@ -149,7 +149,7 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         || !after_inline.is_empty()
         || !after_scripts.is_empty();
 
-    // §1.9-5: before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
+    // before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
     if has_hooks {
         let description = confirm_description(&before_inline, &before_scripts, &after_inline, &after_scripts);
         if !ports.confirmer.confirm_hook(&description) {
@@ -157,7 +157,7 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         }
     }
 
-    // §1.9 step 6: target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
+    // target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
     // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
     ports.payload.ensure_target(&req.target_root)?;
 
@@ -241,7 +241,7 @@ fn resolve_answers(
     for question in questions {
         let active = match &question.when {
             Some(when) => {
-                // §1.9: data 병합(step 3)은 answer 확정(step 2) 이후다. 따라서 `when`은 앞선
+                // data 병합(step 3)은 answer 확정(step 2) 이후다. 따라서 `when`은 앞선
                 // 답변 + builtins만 참조하며 data 네임스페이스는 컨텍스트에서 부재다(None).
                 let ctx = build_context(resolved.clone(), None, builtins.clone());
                 ports.condition_evaluator.is_active(when, &ctx)?

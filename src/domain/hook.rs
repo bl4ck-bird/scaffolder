@@ -16,7 +16,7 @@ pub trait Confirmer {
     fn confirm_external_write(&self, path: &Path) -> bool;
 }
 
-/// 훅 실행 시점(§1.8): manifest `when` 조건 없이 before/after 단계에 매핑된다.
+/// 훅 실행 시점: manifest `when` 조건 없이 before/after 단계에 매핑된다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookPhase {
     Before,
@@ -79,7 +79,7 @@ pub trait HookRunner {
     ) -> anyhow::Result<()>;
 }
 
-/// answer 맵을 훅 실행용 env로 변환한다(§67). 키는 `SCAFFOLDER_<UPPER(name)>`.
+/// answer 맵을 훅 실행용 env로 변환한다. 키는 `SCAFFOLDER_<UPPER(name)>`.
 ///
 /// `List`(multiselect)는 공백으로 join한다 — `answer::canonical_string`(choice 매칭용, 콤마
 /// join)과는 목적이 다른 별도 포맷이라 재사용하지 않는다.

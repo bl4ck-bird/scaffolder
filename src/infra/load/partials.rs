@@ -10,7 +10,7 @@ use crate::domain::render::PartialSource;
 use crate::infra::load::trust::ensure_within_root;
 
 /// `<template_root>/partials/` 하위 조각을 이름→소스로 로드한다. `partials/`가 없으면 빈 맵.
-/// §1.8: `partials/` 루트나 재귀 하위의 leaf가 외부 심링크(dir 경유 포함)면 `trust` 없이 거부한다.
+/// `partials/` 루트나 재귀 하위의 leaf가 외부 심링크(dir 경유 포함)면 `trust` 없이 거부한다.
 pub struct FsPartialSource {
     pub root_canon: PathBuf,
     pub trust: bool,

@@ -16,7 +16,7 @@ use crate::domain::question::{
 use crate::infra::load::trust::ensure_within_root;
 use crate::infra::load::{toml_to_answer_value, toml_to_data_value};
 
-/// TOML로 `scaffold.toml`을 읽는 `ManifestSource`. §1.8: `path`가 실효 소스 루트 밖 심링크면
+/// TOML로 `scaffold.toml`을 읽는 `ManifestSource`. `path`가 실효 소스 루트 밖 심링크면
 /// `trust` 없이 거부한다.
 pub struct TomlManifestSource {
     pub root_canon: PathBuf,

@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::domain::store::SourceRootSource;
 
-/// `<template_root>/.scaffoldroot`를 읽어 실효 소스 루트를 해석한다(§1.7). 내용은 template_root
+/// `<template_root>/.scaffoldroot`를 읽어 실효 소스 루트를 해석한다. 내용은 template_root
 /// 상대 subpath다. 파일이 없으면 template_root 그대로. `..`·절대경로·외부 심링크로 template_root를
 /// 벗어나면 에러.
 pub struct FsSourceRootSource;

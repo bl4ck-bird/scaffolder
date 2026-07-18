@@ -178,7 +178,7 @@ fn sanitize_name(name: &str) -> String {
 }
 
 /// 파일시스템 기반 `HookSource`: `hooks/<before|after>/`를 파일명 바이트 lexical 순서로 열거한다.
-/// §1.8: 심링크는 follow해 대상을 검사한다(내부 symlink→file은 실행 가능해야 하므로 skip하지
+/// 심링크는 follow해 대상을 검사한다(내부 symlink→file은 실행 가능해야 하므로 skip하지
 /// 않는다), 각 스크립트 경로는 외부 심링크면 `trust` 없이 거부한다.
 pub struct FsHookSource {
     pub root_canon: PathBuf,

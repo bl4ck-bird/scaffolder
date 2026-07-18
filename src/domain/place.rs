@@ -55,7 +55,7 @@ impl FileMode {
         FileMode(0o666)
     }
 
-    /// base(`0o666`)에 mode prefix를 적용한다. 파일명의 접두사 순서는 무관하며, 계산은 §1.3의
+    /// base(`0o666`)에 mode prefix를 적용한다. 파일명의 접두사 순서는 무관하며, 계산은
     /// 고정 순서(executable → private → readonly)로 적용한다 — `|0o111`과 `&^0o77`은 비가환이라
     /// 적용 순서가 결과를 바꾸기 때문이다. stackable.
     pub fn from_modes(modes: &[crate::domain::name::Mode]) -> Self {
@@ -114,7 +114,7 @@ pub struct DestStatus {
 pub trait PayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>>;
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>>;
-    /// target 디렉토리를 보장한다(부재 시 생성). §1.9 step 6 — plan 이후 write 직전에 호출한다.
+    /// target 디렉토리를 보장한다(부재 시 생성). plan 이후 write 직전에 호출한다.
     fn ensure_target(&self, target_root: &Path) -> Result<()>;
     /// payload 파일 하나를 원자적으로 쓴다. `overwrite`가 false면 dest가 새로 생겨야 하며, 경쟁으로
     /// dest가 먼저 생기면 조용히 덮지 않고 실패한다(no-clobber). true면 기존 dest를 원자 교체한다.
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn from_modes_is_prefix_order_independent() {
         use crate::domain::name::Mode;
-        // 파일명 접두사 순서가 달라도 §1.3 고정 계산 순서로 같은 결과.
+        // 파일명 접두사 순서가 달라도 고정 계산 순서로 같은 결과.
         let a = FileMode::from_modes(&[Mode::Executable, Mode::Private]);
         let b = FileMode::from_modes(&[Mode::Private, Mode::Executable]);
         assert_eq!(a.bits(), b.bits());
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn from_modes_two_way_combos() {
         use crate::domain::name::Mode;
-        // §1.3 전체 계약을 잠근다(umask 전 8개 결과 중 2-way 조합).
+        // 전체 계약을 잠근다(umask 전 8개 결과 중 2-way 조합).
         // exec+readonly: 0o777 &^0o222 = 0o555.
         assert_eq!(
             FileMode::from_modes(&[Mode::Executable, Mode::Readonly]).bits(),

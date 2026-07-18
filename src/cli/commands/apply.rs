@@ -74,10 +74,10 @@ pub fn run(args: ApplyArgs) -> Result<()> {
             .with_context(|| format!("template root {} does not exist", template_root.display()))?;
         ensure_within_root(&scaffoldroot_marker, &template_root_canon, args.trust)?;
     }
-    // §1.9 step 1: `.scaffoldroot`으로 실효 소스 루트를 해석한다. 이후 모든 로딩(manifest·files·
+    // `.scaffoldroot`으로 실효 소스 루트를 해석한다. 이후 모든 로딩(manifest·files·
     // partials·data·ignore)은 실효 루트를 기준으로 한다.
     let template_root = FsSourceRootSource.resolve(&template_root)?;
-    // §1.8: 이후 모든 로더 읽기 지점의 외부 심링크 가드는 이 실효 루트 기준이다.
+    // 이후 모든 로더 읽기 지점의 외부 심링크 가드는 이 실효 루트 기준이다.
     let root_canon = template_root
         .canonicalize()
         .with_context(|| format!("failed to resolve template root {}", template_root.display()))?;

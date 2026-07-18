@@ -32,7 +32,7 @@ impl DataValue {
 }
 
 /// `base` 위에 `overlay`를 deep-merge한다. 양쪽이 Table이면 키 단위로 재귀 병합하고, 그 외에는
-/// overlay가 base를 대체한다(non-dict replace). §1.5.
+/// overlay가 base를 대체한다(non-dict replace).
 pub fn merge(base: DataValue, overlay: DataValue) -> DataValue {
     match (base, overlay) {
         (DataValue::Table(mut base), DataValue::Table(overlay)) => {
@@ -51,7 +51,7 @@ pub fn merge(base: DataValue, overlay: DataValue) -> DataValue {
 
 /// `data/*.toml`을 lexical 순서로 `base` 위에 deep-merge하는 포트. `base`는 매니페스트의
 /// `[data]`이며, 병합은 `[data]`▷f1▷f2… 단일 left-fold다 — deep-merge는 table→scalar→table에서
-/// 결합법칙이 성립하지 않으므로 파일끼리 먼저 합친 뒤 base에 합치면 안 된다(§1.5). infra가
+/// 결합법칙이 성립하지 않으므로 파일끼리 먼저 합친 뒤 base에 합치면 안 된다. infra가
 /// TOML 파싱으로 구현한다.
 pub trait DataSource {
     fn load(&self, template_root: &Path, base: DataValue) -> Result<DataValue>;

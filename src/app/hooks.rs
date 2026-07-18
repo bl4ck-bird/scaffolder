@@ -30,7 +30,7 @@ pub fn collect_active_inline<'a>(
     Ok(active)
 }
 
-/// 부작용 전 단일 confirm 게이트(§1.9-5)에 쓸 설명. before/after 각각 인라인(선언 순서) →
+/// 부작용 전 단일 confirm 게이트에 쓸 설명. before/after 각각 인라인(선언 순서) →
 /// 폴더 스크립트(lexical) 순으로 한 줄씩 나열한다.
 pub fn confirm_description(
     before_inline: &[&Hook],

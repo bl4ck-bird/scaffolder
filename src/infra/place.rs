@@ -104,7 +104,7 @@ const MAX_WALK_DEPTH: u32 = 64;
 ///
 /// - temp는 dest와 동일 디렉토리(=동일 파일시스템)라 `rename`이 원자적이다.
 /// - `create_new`(O_EXCL)는 심링크를 따라가지 않고 새 파일만 만든다.
-/// - 모드는 생성 시 `mode`로 지정해 OS가 umask를 적용한다(§1.3). private 파일이 최종 위치에
+/// - 모드는 생성 시 `mode`로 지정해 OS가 umask를 적용한다. private 파일이 최종 위치에
 ///   처음부터 올바른 권한으로 나타나므로 잘못된 권한 노출 창이 없다.
 /// - `rename`은 dest가 기존 심링크여도 심링크 자체를 원자 교체한다(대상 미추종) → target 밖 오염 없음.
 /// - 부분출력 없음: 실패 시 temp를 정리하고 dest는 이전 상태를 유지한다.
@@ -187,7 +187,7 @@ fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode, _overwrite: bool) 
 /// 최종 기록 위치를 해석한다. 최종 컴포넌트는 `atomic_write`가 제자리에서 원자 교체하므로
 /// **dereference하지 않고**, 부모(중간 컴포넌트)만 심링크를 따라 해석한 뒤 최종 basename을 그대로
 /// 붙인다. 이렇게 하면 최종 컴포넌트가 외부를 가리키는 기존 심링크여도 containment는 target 안으로
-/// 판정되어 §1.10대로 overwrite(제자리 교체)로 처리된다 — 중간 컴포넌트 심링크만 외부쓰기 대상이다.
+/// 판정되어 overwrite(제자리 교체)로 처리된다 — 중간 컴포넌트 심링크만 외부쓰기 대상이다.
 fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(file_name)) => {
@@ -225,7 +225,7 @@ fn resolve_existing_ancestor(dir: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-/// payload를 열거한다. target 안(=source root 안)을 가리키는 심링크는 dereference한다(§1.10):
+/// payload를 열거한다. target 안(=source root 안)을 가리키는 심링크는 dereference한다:
 /// 디렉토리 심링크는 재귀, 파일 심링크는 target 내용을 읽는다(`read_content`의 `fs::read`가 추종).
 /// source root 밖을 가리키는 심링크는 외부 내용 유입이므로 거부한다(fail-loud). 디렉토리 심링크로
 /// 생기는 cycle은 canonical 경로 추적으로 탐지해 에러낸다.
@@ -547,7 +547,7 @@ mod tests {
         assert!(status.exists);
         assert!(status.is_symlink);
         // 최종 컴포넌트 심링크는 제자리 교체되므로 target 안(overwrite)으로 판정된다 — 외부를
-        // 가리켜도 rename은 링크 자체를 대체하고 대상을 건드리지 않는다(§1.10).
+        // 가리켜도 rename은 링크 자체를 대체하고 대상을 건드리지 않는다.
         assert!(status.inside_target);
         assert_eq!(
             status.final_path,

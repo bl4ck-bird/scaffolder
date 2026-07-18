@@ -866,7 +866,7 @@ fn apply_exposes_merged_data_in_render_context() {
 
 #[test]
 fn apply_dedup_lines_over_included_partial() {
-    // §1.4 대표 시나리오: partial을 `{% include %}`로 조립한 결과를 `{% filter dedup_lines %}`로
+    // 대표 시나리오: partial을 `{% include %}`로 조립한 결과를 `{% filter dedup_lines %}`로
     // 중복 제거.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
@@ -898,7 +898,7 @@ fn apply_dedup_lines_over_included_partial() {
 
 #[test]
 fn apply_when_cannot_reference_data() {
-    // §1.9: data는 answer 확정(step 2) 이후 병합(step 3)되므로 `when`은 data 네임스페이스 자체를
+    // data는 answer 확정(step 2) 이후 병합(step 3)되므로 `when`은 data 네임스페이스 자체를
     // 보지 못한다. 멤버 접근(`data.flag`)뿐 아니라 네임스페이스 참조(`not data`)도 미정의로 실패해야
     // 한다(빈 테이블로 노출하면 `not data`가 성공해 우회 가능 — 그 우회를 잠근다).
     let template = tempfile::tempdir().expect("template tempdir");
@@ -1001,7 +1001,7 @@ fn apply_applies_mode_prefix_permissions() {
 #[test]
 fn apply_render_failure_leaves_no_target() {
     // strict undefined 렌더 에러는 plan 단계에서 실패한다. target은 plan 이후 생성되므로 빈 target이
-    // 남지 않아야 한다(§1.9).
+    // 남지 않아야 한다.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let files = template.path().join("files");
@@ -1063,7 +1063,7 @@ fn apply_uses_scaffoldroot_effective_source_root() {
 fn apply_force_replaces_existing_external_symlink_dest_in_place() {
     use std::os::unix::fs::symlink;
 
-    // target에 외부 파일을 가리키는 기존 심링크가 있고 템플릿이 같은 이름을 쓴다. §1.10대로 이는
+    // target에 외부 파일을 가리키는 기존 심링크가 있고 템플릿이 같은 이름을 쓴다. 이는
     // 외부쓰기가 아니라 overwrite(제자리 교체)여야 한다 — `--force`로 링크가 일반 파일로 교체되고
     // 외부 대상은 불변이어야 한다.
     let template = tempfile::tempdir().expect("template tempdir");
@@ -1345,7 +1345,7 @@ fn apply_dry_run_skips_hook_confirm_and_execution() {
     assert!(!target.exists(), "dry-run must not create the target directory or run hooks");
 }
 
-/// §1.8: 외부(실효 소스 루트 밖) 심링크 제어파일은 `--trust` 없이는 거부되어야 한다
+/// 외부(실효 소스 루트 밖) 심링크 제어파일은 `--trust` 없이는 거부되어야 한다
 /// (부작용 전 abort); `--trust`로 opt-in하면 정상 로드된다. 내부 심링크는 항상 허용된다.
 #[cfg(unix)]
 #[test]

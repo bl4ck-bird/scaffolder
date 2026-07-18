@@ -14,7 +14,7 @@ use crate::infra::load::trust::ensure_within_root;
 const STATIC_NAME: &str = ".scaffoldignore";
 const JINJA_NAME: &str = ".scaffoldignore.jinja";
 
-/// gitignore 시맨틱으로 정적/렌더된 `.scaffoldignore`를 로드하는 `IgnoreSource`. §1.8: 외부
+/// gitignore 시맨틱으로 정적/렌더된 `.scaffoldignore`를 로드하는 `IgnoreSource`. 외부
 /// 심링크는 `trust` 없이 거부한다.
 pub struct FsIgnoreSource<'a> {
     renderer: &'a dyn Renderer,

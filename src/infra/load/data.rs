@@ -11,7 +11,7 @@ use crate::infra::load::toml_to_data_value;
 
 /// `<template_root>/data/*.toml`을 파일명 lexical 순서로 `base`(매니페스트 `[data]`) 위에
 /// 단일 left-fold한다. `data/`가 없으면 `base` 그대로. 읽기/메타데이터 오류는 조용히 넘기지
-/// 않고 전파한다(불완전한 정적 데이터로 진행 방지). §1.8: `data/` 디렉토리 자체가 외부 심링크면
+/// 않고 전파한다(불완전한 정적 데이터로 진행 방지). `data/` 디렉토리 자체가 외부 심링크면
 /// `trust` 없이 거부한다(`read_dir`가 dir 심링크를 follow). 디렉토리 안 leaf 심링크는
 /// `file_type()`(no-follow)로 여전히 skip — 외부 읽기 표면이 아니다.
 pub struct FsDataSource {

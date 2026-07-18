@@ -30,7 +30,7 @@ pub struct ScaffolderBuiltins {
 }
 
 /// 답변 확정 후 불변 컨텍스트. 공개 setter가 없다 — `build_context`로만 생성한다. `data`는
-/// `None`이면 아직 병합 전(§1.9 step 3 이전)이라 렌더 컨텍스트에서 `data` 네임스페이스 자체가
+/// `None`이면 아직 병합 전이라 렌더 컨텍스트에서 `data` 네임스페이스 자체가
 /// 부재한다 — `when` 평가(answer 확정 단계)에서 `data`를 참조하면 strict undefined로 에러난다.
 #[derive(Debug, Clone)]
 pub struct AnswerContext {
