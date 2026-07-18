@@ -13,12 +13,13 @@ use crate::cli::confirm::StdConfirmer;
 use crate::cli::prompt::InquireAnswerSource;
 use crate::domain::answer::ScaffolderBuiltins;
 use crate::domain::render::PartialSource;
-use crate::domain::store::TemplateStore;
+use crate::domain::store::{SourceRootSource, TemplateStore};
 use crate::infra::load::answers::load_answers_file;
 use crate::infra::load::data::FsDataSource;
 use crate::infra::load::ignore::FsIgnoreSource;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::load::partials::FsPartialSource;
+use crate::infra::load::source_root::FsSourceRootSource;
 use crate::infra::load::store::FsTemplateStore;
 use crate::infra::place::FsPayloadStore;
 use crate::infra::render::expr::MiniJinjaConditionEvaluator;
@@ -56,6 +57,9 @@ pub struct ApplyArgs {
 pub fn run(args: ApplyArgs) -> Result<()> {
     let store = FsTemplateStore::new(args.template_dir.clone());
     let template_root = store.resolve(&args.template)?;
+    // §1.9 step 1: `.scaffoldroot`으로 실효 소스 루트를 해석한다. 이후 모든 로딩(manifest·files·
+    // partials·data·ignore)은 실효 루트를 기준으로 한다.
+    let template_root = FsSourceRootSource.resolve(&template_root)?;
     let target_root = std::path::absolute(PathBuf::from(&args.target))
         .with_context(|| format!("failed to resolve target path {:?}", args.target))?;
 

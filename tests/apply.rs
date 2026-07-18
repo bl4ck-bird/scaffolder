@@ -1023,3 +1023,37 @@ fn apply_render_failure_leaves_no_target() {
         "a render failure in the plan phase must not create the target directory"
     );
 }
+
+#[test]
+fn apply_uses_scaffoldroot_effective_source_root() {
+    // repo top에 `.scaffoldroot`만 두고 실제 템플릿은 하위 `template/`에 둔다. 실효 루트가 하위로
+    // 이동해 거기의 scaffold.toml·files/를 읽어야 한다.
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    fs::write(repo.path().join(".scaffoldroot"), "template\n").expect("write .scaffoldroot");
+    fs::write(repo.path().join("README.md"), "repo readme, not template").expect("write repo readme");
+    let inner = repo.path().join("template");
+    fs::create_dir_all(inner.join("files")).expect("mkdir inner files");
+    fs::write(
+        inner.join("scaffold.toml"),
+        "[[questions]]\nname = \"project\"\ntype = \"string\"\n",
+    )
+    .expect("write inner scaffold.toml");
+    fs::write(inner.join("files/out.txt.jinja"), "{{ project }}").expect("write inner payload");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(repo.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=hi");
+    cmd.assert().success();
+
+    let out = fs::read_to_string(target.join("out.txt")).expect("read out.txt");
+    assert_eq!(out, "hi");
+    // repo top의 README는 템플릿 payload가 아니므로 배치되지 않는다.
+    assert!(!target.join("README.md").exists());
+}
