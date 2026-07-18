@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::cli::commands::apply::{self, ApplyArgs};
 use crate::cli::commands::template::list::{self, ListArgs};
+use crate::cli::commands::template::new::{self, NewArgs};
 
 #[derive(Debug, Parser)]
 #[command(name = "scaffolder", version, about = "선언형 프로젝트 스캐폴딩 CLI")]
@@ -31,6 +32,8 @@ struct TemplateArgs {
 enum TemplateCommand {
     /// 스토어의 템플릿 목록을 출력한다.
     List(ListArgs),
+    /// 스토어에 신규 템플릿 뼈대를 생성한다.
+    New(NewArgs),
 }
 
 pub fn run() -> Result<()> {
@@ -39,6 +42,7 @@ pub fn run() -> Result<()> {
         Command::Apply(args) => apply::run(args),
         Command::Template(args) => match args.command {
             TemplateCommand::List(args) => list::run(args),
+            TemplateCommand::New(args) => new::run(args),
         },
     }
 }

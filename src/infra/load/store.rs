@@ -1,11 +1,12 @@
-//! 스토어 조회(XDG·`--template-dir` 우선순위) — `TemplateStore`.
+//! 스토어 조회·생성(XDG·`--template-dir` 우선순위) — `TemplateStore`, `TemplateInitializer`.
 
 use std::env;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
-use crate::domain::store::{TemplateCatalog, TemplateListing, TemplateStore};
+use crate::domain::skeleton::SkeletonEntry;
+use crate::domain::store::{TemplateCatalog, TemplateInitializer, TemplateListing, TemplateStore};
 
 /// `--template-dir` > `$SCAFFOLDER_HOME` > `$XDG_CONFIG_HOME/scaffolder` > `~/.scaffolder`
 /// 순으로 스토어를 조회하는 `TemplateStore`.
@@ -109,6 +110,38 @@ impl TemplateCatalog for FsTemplateStore {
         }
 
         Ok(listings)
+    }
+}
+
+impl TemplateInitializer for FsTemplateStore {
+    fn create(&self, name: &str, entries: &[SkeletonEntry]) -> Result<PathBuf> {
+        let bases = self.store_bases();
+        let Some(base) = bases.first() else {
+            bail!("no store location available");
+        };
+        std::fs::create_dir_all(base)?;
+
+        let template_root = base.join(name);
+        // exists 가드는 어떤 entry도 쓰기 전에 검사한다 — 재실행 시 기존 디렉토리를
+        // 부작용 없이 abort하기 위함(디렉토리든 파일이든 이미 있으면 거부).
+        if template_root.symlink_metadata().is_ok() {
+            bail!("template {name:?} already exists at {}", template_root.display());
+        }
+
+        for entry in entries {
+            let path = template_root.join(&entry.rel);
+            match entry.content {
+                None => std::fs::create_dir_all(&path)?,
+                Some(content) => {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&path, content)?;
+                }
+            }
+        }
+
+        Ok(template_root)
     }
 }
 
@@ -492,5 +525,80 @@ mod tests {
         .expect("missing base should be skipped, not an error");
 
         assert!(listings.is_empty());
+    }
+
+    #[test]
+    fn create_writes_skeleton_entries_under_first_base() {
+        let base = tempdir().expect("tempdir");
+        let store = FsTemplateStore::new(Some(base.path().to_path_buf()));
+        let entries = crate::domain::skeleton::skeleton(false);
+
+        let created = store
+            .create("demo", &entries)
+            .expect("create should succeed");
+
+        assert_eq!(created, base.path().join("demo"));
+        assert!(created.join("scaffold.toml").is_file());
+        assert!(created.join("files").is_dir());
+        assert!(created.join("files/README.md.jinja").is_file());
+    }
+
+    #[test]
+    fn create_writes_full_skeleton_entries() {
+        let base = tempdir().expect("tempdir");
+        let store = FsTemplateStore::new(Some(base.path().to_path_buf()));
+        let entries = crate::domain::skeleton::skeleton(true);
+
+        let created = store
+            .create("demo-full", &entries)
+            .expect("create should succeed");
+
+        assert!(created.join("partials/header.txt").is_file());
+        assert!(created.join("data/sample.toml").is_file());
+        assert!(created.join("hooks/before").is_dir());
+        assert!(created.join("hooks/after").is_dir());
+    }
+
+    #[test]
+    fn create_creates_missing_base_dir() {
+        let root = tempdir().expect("tempdir");
+        let base = root.path().join("does-not-exist-yet");
+        let store = FsTemplateStore::new(Some(base.clone()));
+        let entries = crate::domain::skeleton::skeleton(false);
+
+        let created = store.create("demo", &entries).expect("create should succeed");
+
+        assert!(base.is_dir());
+        assert_eq!(created, base.join("demo"));
+    }
+
+    #[test]
+    fn create_errors_and_has_no_side_effects_when_name_already_exists() {
+        let base = tempdir().expect("tempdir");
+        let existing = base.path().join("demo");
+        std::fs::create_dir(&existing).expect("pre-create target as empty dir");
+        let store = FsTemplateStore::new(Some(base.path().to_path_buf()));
+        let entries = crate::domain::skeleton::skeleton(false);
+
+        let err = store
+            .create("demo", &entries)
+            .expect_err("create should error when name already exists");
+
+        assert!(err.to_string().contains("demo"));
+        // exists 가드는 쓰기 전에 검사돼야 한다 — 기존 빈 디렉토리에 파일이 새로 생기지 않아야 한다.
+        let remaining: Vec<_> = std::fs::read_dir(&existing)
+            .expect("read existing dir")
+            .collect();
+        assert!(remaining.is_empty(), "create must not write into an existing target");
+    }
+
+    #[test]
+    fn create_errors_when_name_collides_with_existing_file() {
+        let base = tempdir().expect("tempdir");
+        std::fs::write(base.path().join("demo"), "not a dir").expect("pre-create as file");
+        let store = FsTemplateStore::new(Some(base.path().to_path_buf()));
+        let entries = crate::domain::skeleton::skeleton(false);
+
+        assert!(store.create("demo", &entries).is_err());
     }
 }

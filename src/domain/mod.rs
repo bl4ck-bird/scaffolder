@@ -10,3 +10,4 @@ pub mod hook;
 pub mod data;
 pub mod ignore;
 pub mod render;
+pub mod skeleton;
