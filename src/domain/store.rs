@@ -1,4 +1,5 @@
-//! 템플릿 스토어 조회·생성 포트: `TemplateStore`, `TemplateInitializer`, `SourceRootSource`.
+//! 템플릿 스토어 조회·생성·열거 포트: `TemplateStore`, `TemplateInitializer`, `SourceRootSource`,
+//! `TemplateCatalog`.
 
 use std::path::{Path, PathBuf};
 
