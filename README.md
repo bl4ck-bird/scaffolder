@@ -88,6 +88,8 @@ the generated project.
 | `--answers-file <path>` | TOML file of answers (`name = value`); a matching `--answers K=V` takes precedence over the same key here |
 | `--defaults` | use each question's default without prompting; fails if a question has no default |
 | `--force` | overwrite existing files in the target without prompting |
+| `--yes` | run the template's hooks without the confirmation prompt |
+| `--trust` | allow reading control files reached by a symlink that points outside the template (default: refuse) |
 | `--dry-run` | print the write plan without touching the filesystem |
 | `--template-dir <path>` | directory to resolve a template name against, before the default store locations |
 

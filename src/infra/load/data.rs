@@ -6,12 +6,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::domain::data::{merge, DataSource, DataValue};
+use crate::infra::load::trust::ensure_within_root;
 use crate::infra::load::toml_to_data_value;
 
 /// `<template_root>/data/*.toml`을 파일명 lexical 순서로 `base`(매니페스트 `[data]`) 위에
 /// 단일 left-fold한다. `data/`가 없으면 `base` 그대로. 읽기/메타데이터 오류는 조용히 넘기지
-/// 않고 전파한다(불완전한 정적 데이터로 진행 방지).
-pub struct FsDataSource;
+/// 않고 전파한다(불완전한 정적 데이터로 진행 방지). §1.8: `data/` 디렉토리 자체가 외부 심링크면
+/// `trust` 없이 거부한다(`read_dir`가 dir 심링크를 follow). 디렉토리 안 leaf 심링크는
+/// `file_type()`(no-follow)로 여전히 skip — 외부 읽기 표면이 아니다.
+pub struct FsDataSource {
+    pub root_canon: PathBuf,
+    pub trust: bool,
+}
 
 impl DataSource for FsDataSource {
     fn load(&self, template_root: &Path, base: DataValue) -> Result<DataValue> {
@@ -19,6 +25,7 @@ impl DataSource for FsDataSource {
         if !data_dir.exists() {
             return Ok(base);
         }
+        ensure_within_root(&data_dir, &self.root_canon, self.trust)?;
 
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in fs::read_dir(&data_dir)
@@ -66,6 +73,13 @@ mod tests {
         }
     }
 
+    fn source(dir: &std::path::Path) -> FsDataSource {
+        FsDataSource {
+            root_canon: dir.canonicalize().unwrap(),
+            trust: false,
+        }
+    }
+
     #[test]
     fn merges_data_files_in_lexical_order_onto_base() {
         let dir = TempDir::new().unwrap();
@@ -75,7 +89,7 @@ mod tests {
         fs::write(data.join("b.toml"), "shared = \"from-b\"\nonly_b = 2\n").unwrap();
 
         let base = table(vec![("from_base", DataValue::Int(0))]);
-        let loaded = FsDataSource.load(dir.path(), base).unwrap();
+        let loaded = source(dir.path()).load(dir.path(), base).unwrap();
 
         assert_eq!(get(&loaded, "from_base"), Some(&DataValue::Int(0)));
         assert_eq!(get(&loaded, "shared"), Some(&DataValue::Str("from-b".into())));
@@ -94,7 +108,7 @@ mod tests {
         fs::write(data.join("b.toml"), "[settings]\nb = 2\n").unwrap();
 
         let base = table(vec![("settings", table(vec![("a", DataValue::Int(1))]))]);
-        let loaded = FsDataSource.load(dir.path(), base).unwrap();
+        let loaded = source(dir.path()).load(dir.path(), base).unwrap();
 
         assert_eq!(
             get(&loaded, "settings"),
@@ -107,16 +121,66 @@ mod tests {
     fn absent_data_dir_returns_base() {
         let dir = TempDir::new().unwrap();
         let base = table(vec![("k", DataValue::Bool(true))]);
-        let loaded = FsDataSource.load(dir.path(), base.clone()).unwrap();
+        let loaded = source(dir.path()).load(dir.path(), base.clone()).unwrap();
         assert_eq!(loaded, base);
     }
 
     #[test]
     fn empty_base_and_absent_dir_is_empty_table() {
         let dir = TempDir::new().unwrap();
-        let loaded = FsDataSource
+        let loaded = source(dir.path())
             .load(dir.path(), DataValue::empty_table())
             .unwrap();
         assert_eq!(loaded, DataValue::Table(BTreeMap::new()));
+    }
+
+    #[test]
+    fn internal_symlinked_data_dir_is_allowed() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let real_data = dir.path().join("real-data");
+        fs::create_dir_all(&real_data).unwrap();
+        fs::write(real_data.join("a.toml"), "k = 1\n").unwrap();
+        symlink(&real_data, dir.path().join("data")).unwrap();
+
+        let loaded = source(dir.path())
+            .load(dir.path(), DataValue::empty_table())
+            .unwrap();
+        assert_eq!(get(&loaded, "k"), Some(&DataValue::Int(1)));
+    }
+
+    #[test]
+    fn external_symlinked_data_dir_is_rejected_without_trust() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let external_data = outside.path().join("data");
+        fs::create_dir_all(&external_data).unwrap();
+        fs::write(external_data.join("a.toml"), "k = 1\n").unwrap();
+        symlink(&external_data, dir.path().join("data")).unwrap();
+
+        let result = source(dir.path()).load(dir.path(), DataValue::empty_table());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn external_symlinked_data_dir_is_allowed_with_trust() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let external_data = outside.path().join("data");
+        fs::create_dir_all(&external_data).unwrap();
+        fs::write(external_data.join("a.toml"), "k = 1\n").unwrap();
+        symlink(&external_data, dir.path().join("data")).unwrap();
+
+        let trusted = FsDataSource {
+            root_canon: dir.path().canonicalize().unwrap(),
+            trust: true,
+        };
+        let loaded = trusted.load(dir.path(), DataValue::empty_table()).unwrap();
+        assert_eq!(get(&loaded, "k"), Some(&DataValue::Int(1)));
     }
 }

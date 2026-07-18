@@ -1,7 +1,7 @@
 //! `.scaffoldignore` 로드(+ `.jinja` 렌더) — `IgnoreSource`.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -9,18 +9,39 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use crate::domain::answer::AnswerContext;
 use crate::domain::ignore::{IgnoreMatcher, IgnoreSource};
 use crate::domain::render::Renderer;
+use crate::infra::load::trust::ensure_within_root;
 
 const STATIC_NAME: &str = ".scaffoldignore";
 const JINJA_NAME: &str = ".scaffoldignore.jinja";
 
-/// gitignore 시맨틱으로 정적/렌더된 `.scaffoldignore`를 로드하는 `IgnoreSource`.
+/// gitignore 시맨틱으로 정적/렌더된 `.scaffoldignore`를 로드하는 `IgnoreSource`. §1.8: 외부
+/// 심링크는 `trust` 없이 거부한다.
 pub struct FsIgnoreSource<'a> {
     renderer: &'a dyn Renderer,
+    root_canon: PathBuf,
+    trust: bool,
 }
 
 impl<'a> FsIgnoreSource<'a> {
-    pub fn new(renderer: &'a dyn Renderer) -> Self {
-        Self { renderer }
+    pub fn new(renderer: &'a dyn Renderer, root_canon: PathBuf, trust: bool) -> Self {
+        Self { renderer, root_canon, trust }
+    }
+}
+
+/// `path`가 읽을 수 있는 파일이면 `Ok(true)`, 아예 없으면 `Ok(false)`. 경로가 존재하는데(심링크
+/// 포함) 파일이 아니면(broken 심링크 등) fail-loud — 조용히 "부재"로 취급해 무시 필터가 사라지는
+/// 것을 막는다.
+fn ignore_file_present(path: &Path) -> Result<bool> {
+    if path.is_file() {
+        return Ok(true);
+    }
+    match path.symlink_metadata() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("failed to stat {}", path.display())),
+        Ok(_) => bail!(
+            "{} exists but could not be read (dangling symlink?)",
+            path.display()
+        ),
     }
 }
 
@@ -28,17 +49,21 @@ impl IgnoreSource for FsIgnoreSource<'_> {
     fn load(&self, template_root: &Path, ctx: &AnswerContext) -> Result<Box<dyn IgnoreMatcher>> {
         let static_path = template_root.join(STATIC_NAME);
         let jinja_path = template_root.join(JINJA_NAME);
-        let static_exists = static_path.is_file();
-        let jinja_exists = jinja_path.is_file();
+        let static_exists = ignore_file_present(&static_path)?;
+        let jinja_exists = ignore_file_present(&jinja_path)?;
 
         let content = match (static_exists, jinja_exists) {
             (true, true) => bail!(
                 "both {STATIC_NAME} and {JINJA_NAME} exist in {}; only one is allowed",
                 template_root.display()
             ),
-            (true, false) => fs::read_to_string(&static_path)
-                .with_context(|| format!("failed to read {}", static_path.display()))?,
+            (true, false) => {
+                ensure_within_root(&static_path, &self.root_canon, self.trust)?;
+                fs::read_to_string(&static_path)
+                    .with_context(|| format!("failed to read {}", static_path.display()))?
+            }
             (false, true) => {
+                ensure_within_root(&jinja_path, &self.root_canon, self.trust)?;
                 let template = fs::read_to_string(&jinja_path)
                     .with_context(|| format!("failed to read {}", jinja_path.display()))?;
                 self.renderer
@@ -105,10 +130,11 @@ mod tests {
     #[test]
     fn static_ignore_file_matches_glob_against_output_path() {
         let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
         fs::write(dir.path().join(STATIC_NAME), "*.tmp\n").unwrap();
 
         let renderer = NoopRenderer;
-        let source = FsIgnoreSource::new(&renderer);
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
@@ -119,6 +145,7 @@ mod tests {
     #[test]
     fn jinja_ignore_file_is_rendered_with_answer_context() {
         let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
         fs::write(
             dir.path().join(JINJA_NAME),
             "{% if \"docker\" not in stacks %}Dockerfile{% endif %}\n",
@@ -126,7 +153,7 @@ mod tests {
         .unwrap();
 
         let renderer = crate::infra::render::render::MiniJinjaRenderer::new();
-        let source = FsIgnoreSource::new(&renderer);
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
 
         let ctx_without_docker = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx_without_docker).unwrap();
@@ -140,9 +167,10 @@ mod tests {
     #[test]
     fn missing_ignore_file_yields_matcher_that_ignores_nothing() {
         let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
 
         let renderer = NoopRenderer;
-        let source = FsIgnoreSource::new(&renderer);
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
@@ -152,10 +180,11 @@ mod tests {
     #[test]
     fn static_ignore_file_directory_pattern_excludes_subtree_files() {
         let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
         fs::write(dir.path().join(STATIC_NAME), "build/\n").unwrap();
 
         let renderer = NoopRenderer;
-        let source = FsIgnoreSource::new(&renderer);
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
@@ -166,10 +195,11 @@ mod tests {
     #[test]
     fn negation_pattern_unexcludes_matched_file() {
         let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
         fs::write(dir.path().join(STATIC_NAME), "*.log\n!keep.log\n").unwrap();
 
         let renderer = NoopRenderer;
-        let source = FsIgnoreSource::new(&renderer);
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
         let ctx = ctx_with_stacks(vec![]);
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
@@ -180,13 +210,99 @@ mod tests {
     #[test]
     fn both_static_and_jinja_ignore_files_present_is_an_error() {
         let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
         fs::write(dir.path().join(STATIC_NAME), "*.tmp\n").unwrap();
         fs::write(dir.path().join(JINJA_NAME), "*.tmp\n").unwrap();
 
         let renderer = NoopRenderer;
-        let source = FsIgnoreSource::new(&renderer);
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
         let ctx = ctx_with_stacks(vec![]);
 
         assert!(source.load(dir.path(), &ctx).is_err());
+    }
+
+    #[test]
+    fn static_ignore_file_via_internal_symlink_is_allowed() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
+        let real = dir.path().join("real.scaffoldignore");
+        fs::write(&real, "*.tmp\n").unwrap();
+        symlink(&real, dir.path().join(STATIC_NAME)).unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
+        let ctx = ctx_with_stacks(vec![]);
+        let matcher = source.load(dir.path(), &ctx).unwrap();
+
+        assert!(matcher.is_ignored(Path::new("foo.tmp")));
+    }
+
+    #[test]
+    fn static_ignore_file_via_external_symlink_is_rejected_without_trust() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
+        let outside = tempdir().unwrap();
+        let external = outside.path().join(STATIC_NAME);
+        fs::write(&external, "*.tmp\n").unwrap();
+        symlink(&external, dir.path().join(STATIC_NAME)).unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
+        let ctx = ctx_with_stacks(vec![]);
+
+        assert!(source.load(dir.path(), &ctx).is_err());
+    }
+
+    #[test]
+    fn broken_symlink_static_ignore_file_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
+        symlink(dir.path().join("nowhere"), dir.path().join(STATIC_NAME)).unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
+        let ctx = ctx_with_stacks(vec![]);
+
+        assert!(source.load(dir.path(), &ctx).is_err());
+    }
+
+    #[test]
+    fn broken_symlink_jinja_ignore_file_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
+        symlink(dir.path().join("nowhere"), dir.path().join(JINJA_NAME)).unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
+        let ctx = ctx_with_stacks(vec![]);
+
+        assert!(source.load(dir.path(), &ctx).is_err());
+    }
+
+    #[test]
+    fn static_ignore_file_via_external_symlink_is_allowed_with_trust() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let root_canon = dir.path().canonicalize().unwrap();
+        let outside = tempdir().unwrap();
+        let external = outside.path().join(STATIC_NAME);
+        fs::write(&external, "*.tmp\n").unwrap();
+        symlink(&external, dir.path().join(STATIC_NAME)).unwrap();
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer, root_canon, true);
+        let ctx = ctx_with_stacks(vec![]);
+        let matcher = source.load(dir.path(), &ctx).unwrap();
+
+        assert!(matcher.is_ignored(Path::new("foo.tmp")));
     }
 }

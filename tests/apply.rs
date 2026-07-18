@@ -1344,3 +1344,231 @@ fn apply_dry_run_skips_hook_confirm_and_execution() {
 
     assert!(!target.exists(), "dry-run must not create the target directory or run hooks");
 }
+
+/// §1.8: 외부(실효 소스 루트 밖) 심링크 제어파일은 `--trust` 없이는 거부되어야 한다
+/// (부작용 전 abort); `--trust`로 opt-in하면 정상 로드된다. 내부 심링크는 항상 허용된다.
+#[cfg(unix)]
+#[test]
+fn apply_rejects_externally_symlinked_manifest_without_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_manifest = outside.path().join("scaffold.toml");
+    fs::write(&external_manifest, "").expect("write external manifest");
+    symlink(&external_manifest, template.path().join("scaffold.toml"))
+        .expect("symlink scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().failure();
+    assert!(!target.exists(), "externally symlinked manifest must abort before target creation");
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_externally_symlinked_manifest_with_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_manifest = outside.path().join("scaffold.toml");
+    fs::write(&external_manifest, "").expect("write external manifest");
+    symlink(&external_manifest, template.path().join("scaffold.toml"))
+        .expect("symlink scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--trust");
+
+    cmd.assert().success();
+    assert_eq!(
+        fs::read_to_string(target.join("marker.txt")).expect("read marker.txt"),
+        "marker"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_internally_symlinked_manifest_without_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("real-scaffold.toml"), "").expect("write real manifest");
+    symlink(
+        template.path().join("real-scaffold.toml"),
+        template.path().join("scaffold.toml"),
+    )
+    .expect("symlink scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().success();
+    assert_eq!(
+        fs::read_to_string(target.join("marker.txt")).expect("read marker.txt"),
+        "marker"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_rejects_externally_symlinked_hook_script_without_trust() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_script = outside.path().join("x.sh");
+    fs::write(&external_script, "#!/bin/sh\necho hi > out.txt\n").expect("write external hook");
+    let mut perms = fs::metadata(&external_script).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&external_script, perms).expect("chmod +x external hook");
+    let hooks_before = template.path().join("hooks/before");
+    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
+    symlink(&external_script, hooks_before.join("x.sh")).expect("symlink hook script");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+
+    cmd.assert().failure();
+    assert!(!target.exists(), "externally symlinked hook script must abort before target creation");
+}
+
+/// `.scaffoldroot` 자체가 소스 루트 밖 파일로의 심링크면, 그 내용(실효 소스 루트 선택)을
+/// `--trust` 없이 읽어서는 안 된다 — 외부 제어파일 default-refuse 계약이 `.scaffoldroot`에도 적용된다.
+#[cfg(unix)]
+#[test]
+fn apply_rejects_externally_symlinked_scaffoldroot_without_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_scaffoldroot = outside.path().join("scaffoldroot-content");
+    fs::write(&external_scaffoldroot, "template\n").expect("write external scaffoldroot content");
+    symlink(&external_scaffoldroot, template.path().join(".scaffoldroot"))
+        .expect("symlink .scaffoldroot");
+
+    let inner = template.path().join("template");
+    fs::create_dir_all(inner.join("files")).expect("mkdir inner files");
+    fs::write(inner.join("scaffold.toml"), "").expect("write inner scaffold.toml");
+    fs::write(inner.join("files/marker.txt"), "marker").expect("write inner marker");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().failure();
+    assert!(
+        !target.exists(),
+        "externally symlinked .scaffoldroot must abort before target creation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_externally_symlinked_scaffoldroot_with_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_scaffoldroot = outside.path().join("scaffoldroot-content");
+    fs::write(&external_scaffoldroot, "template\n").expect("write external scaffoldroot content");
+    symlink(&external_scaffoldroot, template.path().join(".scaffoldroot"))
+        .expect("symlink .scaffoldroot");
+
+    let inner = template.path().join("template");
+    fs::create_dir_all(inner.join("files")).expect("mkdir inner files");
+    fs::write(inner.join("scaffold.toml"), "").expect("write inner scaffold.toml");
+    fs::write(inner.join("files/marker.txt"), "marker").expect("write inner marker");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--trust");
+
+    cmd.assert().success();
+    assert_eq!(
+        fs::read_to_string(target.join("marker.txt")).expect("read marker.txt"),
+        "marker"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_fails_on_broken_symlinked_hook_script() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let hooks_before = template.path().join("hooks/before");
+    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
+    symlink(template.path().join("nowhere"), hooks_before.join("x.sh"))
+        .expect("symlink broken hook script");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+
+    cmd.assert().failure();
+    assert!(!target.exists(), "broken hook script symlink must abort before target creation");
+}

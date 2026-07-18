@@ -7,6 +7,7 @@ pub mod data;
 pub mod ignore;
 pub mod answers;
 pub mod partials;
+pub mod trust;
 
 use anyhow::{bail, Result};
 

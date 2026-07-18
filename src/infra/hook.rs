@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::domain::hook::{HookPhase, HookRunner, HookScript, HookSource};
+use crate::infra::load::trust::ensure_within_root;
 
 /// std 프로세스 실행 기반 `HookRunner`.
 pub struct StdHookRunner;
@@ -177,7 +178,12 @@ fn sanitize_name(name: &str) -> String {
 }
 
 /// 파일시스템 기반 `HookSource`: `hooks/<before|after>/`를 파일명 바이트 lexical 순서로 열거한다.
-pub struct FsHookSource;
+/// §1.8: 심링크는 follow해 대상을 검사한다(내부 symlink→file은 실행 가능해야 하므로 skip하지
+/// 않는다), 각 스크립트 경로는 외부 심링크면 `trust` 없이 거부한다.
+pub struct FsHookSource {
+    pub root_canon: PathBuf,
+    pub trust: bool,
+}
 
 impl HookSource for FsHookSource {
     fn scripts(&self, template_root: &Path, phase: HookPhase) -> Result<Vec<HookScript>> {
@@ -190,6 +196,10 @@ impl HookSource for FsHookSource {
         if !dir.exists() {
             return Ok(Vec::new());
         }
+        // leaf 가드(아래)는 `read_dir`가 이미 심링크를 follow해 열거를 마친 뒤에야 실행되므로,
+        // 파일 없는 외부 심링크 phase dir는 leaf 가드를 한 번도 못 거치고 통과해 버린다 —
+        // `read_dir` 전에 dir 자체를 가드해 내용과 무관하게 default-reject를 보장한다.
+        ensure_within_root(&dir, &self.root_canon, self.trust)?;
 
         let mut names: Vec<String> = Vec::new();
         for entry in fs::read_dir(&dir)
@@ -197,11 +207,16 @@ impl HookSource for FsHookSource {
         {
             let entry =
                 entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
-            let file_type = entry
-                .file_type()
-                .with_context(|| format!("failed to stat {}", entry.path().display()))?;
-            if !file_type.is_file() {
-                continue;
+            let path = entry.path();
+            // follow해 판정한다: no-follow(`file_type()`)면 내부 symlink→file 훅이 skip돼 버린다.
+            // broken 심링크는 fail-loud(조용히 skip하면 의도한 훅이 실행되지 않고 사라진다).
+            match fs::metadata(&path) {
+                Ok(meta) if meta.is_file() => {}
+                Ok(_) => continue,
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("failed to stat {} (broken symlink?)", path.display()));
+                }
             }
             let name = entry
                 .file_name()
@@ -215,6 +230,7 @@ impl HookSource for FsHookSource {
             .into_iter()
             .map(|name| {
                 let path = dir.join(&name);
+                ensure_within_root(&path, &self.root_canon, self.trust)?;
                 if let Some(stripped) = name.strip_suffix(".jinja") {
                     let raw = fs::read_to_string(&path).with_context(|| {
                         format!("hook template {} is not valid UTF-8", path.display())
@@ -448,6 +464,13 @@ mod tests {
         );
     }
 
+    fn hook_source(root: &Path) -> FsHookSource {
+        FsHookSource {
+            root_canon: root.canonicalize().expect("canonicalize root"),
+            trust: false,
+        }
+    }
+
     #[test]
     fn scripts_returns_lexical_order_and_classifies_jinja_as_template() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -457,7 +480,7 @@ mod tests {
         fs::write(before.join("20-b.sh.jinja"), b"#!/bin/sh\n# {{ name }}\n").expect("write 20-b");
         fs::write(before.join("05-c.sh"), b"#!/bin/sh\ntrue\n").expect("write 05-c.sh");
 
-        let scripts = FsHookSource
+        let scripts = hook_source(root.path())
             .scripts(root.path(), HookPhase::Before)
             .expect("scripts");
 
@@ -482,9 +505,136 @@ mod tests {
     #[test]
     fn scripts_returns_empty_when_phase_folder_missing() {
         let root = tempfile::tempdir().expect("tempdir");
-        let scripts = FsHookSource
+        let scripts = hook_source(root.path())
             .scripts(root.path(), HookPhase::After)
             .expect("scripts");
         assert!(scripts.is_empty());
+    }
+
+    #[test]
+    fn scripts_follows_internal_symlink_to_file_and_includes_it() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let before = root.path().join("hooks/before");
+        fs::create_dir_all(&before).expect("mkdir hooks/before");
+        let real = root.path().join("real-hook.sh");
+        fs::write(&real, b"#!/bin/sh\ntrue\n").expect("write real hook");
+        let mut perms = fs::metadata(&real).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&real, perms).expect("chmod");
+        symlink(&real, before.join("01-link.sh")).expect("symlink hook");
+
+        let scripts = hook_source(root.path())
+            .scripts(root.path(), HookPhase::Before)
+            .expect("scripts");
+
+        assert_eq!(scripts.len(), 1);
+        match &scripts[0] {
+            HookScript::Executable { name, .. } => assert_eq!(name, "01-link.sh"),
+            other => panic!("expected Executable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scripts_errors_on_broken_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let before = root.path().join("hooks/before");
+        fs::create_dir_all(&before).expect("mkdir hooks/before");
+        symlink(root.path().join("nowhere"), before.join("01-broken.sh")).expect("symlink hook");
+
+        let result = hook_source(root.path()).scripts(root.path(), HookPhase::Before);
+        assert!(result.is_err(), "broken symlink hook must be a fail-loud error");
+    }
+
+    #[test]
+    fn scripts_rejects_external_symlink_without_trust() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let before = root.path().join("hooks/before");
+        fs::create_dir_all(&before).expect("mkdir hooks/before");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let external = outside.path().join("evil.sh");
+        fs::write(&external, b"#!/bin/sh\ntrue\n").expect("write external hook");
+        let mut perms = fs::metadata(&external).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&external, perms).expect("chmod");
+        symlink(&external, before.join("01-external.sh")).expect("symlink hook");
+
+        let result = hook_source(root.path()).scripts(root.path(), HookPhase::Before);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn scripts_allows_external_symlink_with_trust() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let before = root.path().join("hooks/before");
+        fs::create_dir_all(&before).expect("mkdir hooks/before");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let external = outside.path().join("evil.sh");
+        fs::write(&external, b"#!/bin/sh\ntrue\n").expect("write external hook");
+        let mut perms = fs::metadata(&external).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&external, perms).expect("chmod");
+        symlink(&external, before.join("01-external.sh")).expect("symlink hook");
+
+        let trusted = FsHookSource {
+            root_canon: root.path().canonicalize().expect("canonicalize root"),
+            trust: true,
+        };
+        let scripts = trusted
+            .scripts(root.path(), HookPhase::Before)
+            .expect("scripts");
+        assert_eq!(scripts.len(), 1);
+    }
+
+    #[test]
+    fn scripts_rejects_external_symlink_phase_dir_without_trust() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("hooks")).expect("mkdir hooks");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let external_before = outside.path().join("before");
+        fs::create_dir_all(&external_before).expect("mkdir external before");
+        symlink(&external_before, root.path().join("hooks/before")).expect("symlink phase dir");
+
+        let result = hook_source(root.path()).scripts(root.path(), HookPhase::Before);
+        assert!(
+            result.is_err(),
+            "external symlinked phase dir must be rejected without --trust even if empty"
+        );
+    }
+
+    #[test]
+    fn scripts_allows_external_symlink_phase_dir_with_trust() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(root.path().join("hooks")).expect("mkdir hooks");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let external_before = outside.path().join("before");
+        fs::create_dir_all(&external_before).expect("mkdir external before");
+        fs::write(external_before.join("01-a.sh"), b"#!/bin/sh\ntrue\n").expect("write hook");
+        let mut perms = fs::metadata(external_before.join("01-a.sh"))
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(external_before.join("01-a.sh"), perms).expect("chmod");
+        symlink(&external_before, root.path().join("hooks/before")).expect("symlink phase dir");
+
+        let trusted = FsHookSource {
+            root_canon: root.path().canonicalize().expect("canonicalize root"),
+            trust: true,
+        };
+        let scripts = trusted
+            .scripts(root.path(), HookPhase::Before)
+            .expect("scripts");
+        assert_eq!(scripts.len(), 1);
     }
 }

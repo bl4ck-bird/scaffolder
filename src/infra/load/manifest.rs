@@ -1,7 +1,7 @@
 //! `scaffold.toml` 파싱(TOML 격리) — `ManifestSource`.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -13,13 +13,19 @@ use crate::domain::question::{
     validate_choices, validate_question_name, validate_unique_names, Choice, Question,
     QuestionType,
 };
+use crate::infra::load::trust::ensure_within_root;
 use crate::infra::load::{toml_to_answer_value, toml_to_data_value};
 
-/// TOML로 `scaffold.toml`을 읽는 `ManifestSource`.
-pub struct TomlManifestSource;
+/// TOML로 `scaffold.toml`을 읽는 `ManifestSource`. §1.8: `path`가 실효 소스 루트 밖 심링크면
+/// `trust` 없이 거부한다.
+pub struct TomlManifestSource {
+    pub root_canon: PathBuf,
+    pub trust: bool,
+}
 
 impl ManifestSource for TomlManifestSource {
     fn load(&self, path: &Path) -> Result<Manifest> {
+        ensure_within_root(path, &self.root_canon, self.trust)?;
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read manifest at {}", path.display()))?;
         parse_manifest(&text)
@@ -290,6 +296,7 @@ mod tests {
     #[test]
     fn load_reads_manifest_from_file() {
         let dir = std::env::temp_dir();
+        let root_canon = dir.canonicalize().unwrap();
         let path = dir.join(format!(
             "scaffolder-manifest-test-{}.toml",
             std::process::id()
@@ -305,7 +312,7 @@ mod tests {
         )
         .expect("write temp manifest");
 
-        let result = TomlManifestSource.load(&path);
+        let result = (TomlManifestSource { root_canon, trust: false }).load(&path);
         fs::remove_file(&path).ok();
 
         let manifest = result.expect("manifest should load");
@@ -315,7 +322,63 @@ mod tests {
     #[test]
     fn load_reports_missing_file() {
         let path = Path::new("/nonexistent/scaffold.toml");
-        assert!(TomlManifestSource.load(path).is_err());
+        let source = TomlManifestSource {
+            root_canon: PathBuf::from("/nonexistent"),
+            trust: false,
+        };
+        assert!(source.load(path).is_err());
+    }
+
+    #[test]
+    fn load_allows_internal_symlinked_manifest() {
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        let root = TempDir::new().unwrap();
+        let root_canon = root.path().canonicalize().unwrap();
+        let real = root.path().join("real.toml");
+        fs::write(&real, "[[questions]]\nname = \"license\"\ntype = \"string\"\n").unwrap();
+        let link = root.path().join("scaffold.toml");
+        symlink(&real, &link).unwrap();
+
+        let source = TomlManifestSource { root_canon, trust: false };
+        let manifest = source.load(&link).expect("internal symlink must load");
+        assert_eq!(manifest.questions[0].name, "license");
+    }
+
+    #[test]
+    fn load_rejects_external_symlinked_manifest_without_trust() {
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        let root = TempDir::new().unwrap();
+        let root_canon = root.path().canonicalize().unwrap();
+        let outside = TempDir::new().unwrap();
+        let external = outside.path().join("scaffold.toml");
+        fs::write(&external, "[[questions]]\nname = \"license\"\ntype = \"string\"\n").unwrap();
+        let link = root.path().join("scaffold.toml");
+        symlink(&external, &link).unwrap();
+
+        let source = TomlManifestSource { root_canon, trust: false };
+        assert!(source.load(&link).is_err());
+    }
+
+    #[test]
+    fn load_allows_external_symlinked_manifest_with_trust() {
+        use std::os::unix::fs::symlink;
+        use tempfile::TempDir;
+
+        let root = TempDir::new().unwrap();
+        let root_canon = root.path().canonicalize().unwrap();
+        let outside = TempDir::new().unwrap();
+        let external = outside.path().join("scaffold.toml");
+        fs::write(&external, "[[questions]]\nname = \"license\"\ntype = \"string\"\n").unwrap();
+        let link = root.path().join("scaffold.toml");
+        symlink(&external, &link).unwrap();
+
+        let source = TomlManifestSource { root_canon, trust: true };
+        let manifest = source.load(&link).expect("trusted external symlink must load");
+        assert_eq!(manifest.questions[0].name, "license");
     }
 
     #[test]
