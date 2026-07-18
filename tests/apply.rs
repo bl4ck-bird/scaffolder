@@ -961,3 +961,65 @@ fn apply_broken_partial_fails_without_creating_target() {
         "a partial-load failure must not leave an empty target directory"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn apply_applies_mode_prefix_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("executable_run.sh"), "#!/bin/sh\n").expect("write exec");
+    fs::write(files.join("private_secret.txt"), "s").expect("write private");
+    fs::write(files.join("readonly_notes.md"), "n").expect("write readonly");
+    fs::write(files.join("plain.txt"), "p").expect("write plain");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+    cmd.assert().success();
+
+    let mode = |name: &str| {
+        fs::metadata(target.join(name)).expect("stat").permissions().mode() & 0o777
+    };
+
+    // umask에 무관한 불변식만 검사한다(umask는 비트를 추가로 제거만 하므로).
+    assert_eq!(mode("run.sh") & 0o100, 0o100, "executable_ sets owner-execute");
+    assert_eq!(mode("secret.txt") & 0o077, 0, "private_ clears group/other bits");
+    assert_eq!(mode("notes.md") & 0o222, 0, "readonly_ clears all write bits");
+    assert_eq!(mode("plain.txt") & 0o200, 0o200, "plain file is owner-writable");
+    assert_eq!(mode("plain.txt") & 0o111, 0, "plain file is not executable");
+}
+
+#[test]
+fn apply_render_failure_leaves_no_target() {
+    // strict undefined 렌더 에러는 plan 단계에서 실패한다. target은 plan 이후 생성되므로 빈 target이
+    // 남지 않아야 한다(§1.9).
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("bad.txt.jinja"), "{{ undefined_var }}").expect("write bad jinja");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().failure();
+    assert!(
+        !target.exists(),
+        "a render failure in the plan phase must not create the target directory"
+    );
+}

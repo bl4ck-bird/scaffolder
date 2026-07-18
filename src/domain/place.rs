@@ -55,6 +55,24 @@ impl FileMode {
         FileMode(0o666)
     }
 
+    /// base(`0o666`)에 mode prefix를 적용한다. 파일명의 접두사 순서는 무관하며, 계산은 §1.3의
+    /// 고정 순서(executable → private → readonly)로 적용한다 — `|0o111`과 `&^0o77`은 비가환이라
+    /// 적용 순서가 결과를 바꾸기 때문이다. stackable.
+    pub fn from_modes(modes: &[crate::domain::name::Mode]) -> Self {
+        use crate::domain::name::Mode;
+        let mut mode = FileMode::base();
+        if modes.contains(&Mode::Executable) {
+            mode = mode.with_executable();
+        }
+        if modes.contains(&Mode::Private) {
+            mode = mode.with_private();
+        }
+        if modes.contains(&Mode::Readonly) {
+            mode = mode.with_readonly();
+        }
+        mode
+    }
+
     pub fn with_executable(self) -> Self {
         FileMode(self.0 | 0o111)
     }
@@ -96,6 +114,8 @@ pub struct DestStatus {
 pub trait PayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>>;
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>>;
+    /// target 디렉토리를 보장한다(부재 시 생성). §1.9 step 6 — plan 이후 write 직전에 호출한다.
+    fn ensure_target(&self, target_root: &Path) -> Result<()>;
     fn write_file(
         &self,
         target_root: &Path,
@@ -142,5 +162,28 @@ mod tests {
             base.with_executable().with_private().bits(),
             0o700
         );
+    }
+
+    #[test]
+    fn from_modes_is_prefix_order_independent() {
+        use crate::domain::name::Mode;
+        // 파일명 접두사 순서가 달라도 §1.3 고정 계산 순서로 같은 결과.
+        let a = FileMode::from_modes(&[Mode::Executable, Mode::Private]);
+        let b = FileMode::from_modes(&[Mode::Private, Mode::Executable]);
+        assert_eq!(a.bits(), b.bits());
+        assert_eq!(a.bits(), 0o700);
+    }
+
+    #[test]
+    fn from_modes_empty_is_base() {
+        assert_eq!(FileMode::from_modes(&[]).bits(), 0o666);
+    }
+
+    #[test]
+    fn from_modes_all_three_stacked() {
+        use crate::domain::name::Mode;
+        // exec(|0o111) → private(&^0o77) → readonly(&^0o222): 0o777→0o700→0o500(execute 유지, write 제거).
+        let m = FileMode::from_modes(&[Mode::Readonly, Mode::Executable, Mode::Private]);
+        assert_eq!(m.bits(), 0o500);
     }
 }

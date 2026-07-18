@@ -35,6 +35,7 @@ pub struct PlannedWrite {
     pub rel: RelPath,
     pub rendered: bool,
     pub content: Vec<u8>,
+    pub mode: FileMode,
 }
 
 pub struct ApplyReport {
@@ -122,12 +123,17 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
             rel: out_rel,
             rendered: parsed.render,
             content,
+            mode: FileMode::from_modes(&parsed.modes),
         });
     }
 
     if req.dry_run {
         return Ok(ApplyReport { planned });
     }
+
+    // §1.9 step 6: target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
+    // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
+    ports.payload.ensure_target(&req.target_root)?;
 
     for planned_write in &planned {
         let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
@@ -153,7 +159,7 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
             &req.target_root,
             &planned_write.rel,
             &planned_write.content,
-            FileMode::base(),
+            planned_write.mode,
         )?;
     }
 
@@ -379,6 +385,10 @@ mod tests {
 
         fn read_content(&self, _source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>> {
             Ok(self.contents.get(&entry.rel.to_string()).cloned().unwrap_or_default())
+        }
+
+        fn ensure_target(&self, _target_root: &Path) -> Result<()> {
+            Ok(())
         }
 
         fn write_file(

@@ -2,10 +2,11 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use crate::domain::place::{safe_rel_path, DestStatus, FileMode, PayloadEntry, PayloadStore, RelPath};
 
@@ -25,14 +26,18 @@ impl PayloadStore for FsPayloadStore {
         fs::read(&path).with_context(|| format!("failed to read payload file {}", path.display()))
     }
 
+    fn ensure_target(&self, target_root: &Path) -> Result<()> {
+        fs::create_dir_all(target_root)
+            .with_context(|| format!("failed to create target directory {}", target_root.display()))
+    }
+
     fn write_file(
         &self,
         target_root: &Path,
         rel: &RelPath,
         content: &[u8],
-        _mode: FileMode,
+        mode: FileMode,
     ) -> Result<()> {
-        // 권한 비트 적용은 이후로 미루고, 지금은 OS 기본 생성 권한(umask 적용)에 의존한다.
         let path = target_root.join(rel.as_path());
 
         if let Some(parent) = path.parent() {
@@ -40,23 +45,7 @@ impl PayloadStore for FsPayloadStore {
                 .with_context(|| format!("failed to create parent directory for {}", path.display()))?;
         }
 
-        // 기존 dest가 심링크면 대상을 따라 덮어쓰지 않도록 먼저 unlink한다 — 그렇지
-        // 않으면 fs::write가 심링크를 따라가 target 밖의 심링크 대상을 오염시킬 수 있다.
-        match path.symlink_metadata() {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                fs::remove_file(&path)
-                    .with_context(|| format!("failed to unlink existing symlink at {}", path.display()))?;
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(e).with_context(|| format!("failed to stat {}", path.display()));
-            }
-        }
-
-        fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
-
-        Ok(())
+        atomic_write(&path, content, mode)
     }
 
     fn dest_status(&self, target_root: &Path, rel: &RelPath) -> Result<DestStatus> {
@@ -84,6 +73,81 @@ impl PayloadStore for FsPayloadStore {
             is_symlink,
         })
     }
+}
+
+/// temp 파일 고유 접미사용 프로세스-로컬 카운터.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_TEMP_ATTEMPTS: u32 = 32;
+
+/// 같은 부모 디렉토리에 temp를 만들어 내용을 쓰고 `rename`으로 dest에 원자 교체한다.
+///
+/// - temp는 dest와 동일 디렉토리(=동일 파일시스템)라 `rename`이 원자적이다.
+/// - `create_new`(O_EXCL)는 심링크를 따라가지 않고 새 파일만 만든다.
+/// - 모드는 생성 시 `mode`로 지정해 OS가 umask를 적용한다(§1.3). private 파일이 최종 위치에
+///   처음부터 올바른 권한으로 나타나므로 잘못된 권한 노출 창이 없다.
+/// - `rename`은 dest가 기존 심링크여도 심링크 자체를 원자 교체한다(대상 미추종) → target 밖 오염 없음.
+/// - 부분출력 없음: 실패 시 temp를 정리하고 dest는 이전 상태를 유지한다.
+#[cfg(unix)]
+fn atomic_write(dest: &Path, content: &[u8], mode: FileMode) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let parent = dest
+        .parent()
+        .ok_or_else(|| anyhow!("destination {} has no parent directory", dest.display()))?;
+    let file_name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow!("destination {} has no valid file name", dest.display()))?;
+
+    let mut last_exists_err = None;
+    for _ in 0..MAX_TEMP_ATTEMPTS {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(
+            ".{file_name}.{}.{counter}.tmp",
+            std::process::id()
+        ));
+
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode.bits())
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                last_exists_err = Some(e);
+                continue;
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("failed to create temp file for {}", dest.display()));
+            }
+        };
+
+        if let Err(e) = file.write_all(content).and_then(|()| file.sync_all()) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(e).with_context(|| format!("failed to write temp file for {}", dest.display()));
+        }
+        drop(file);
+
+        if let Err(e) = fs::rename(&temp_path, dest) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(e).with_context(|| format!("failed to place {}", dest.display()));
+        }
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "failed to create a unique temp file for {} after {MAX_TEMP_ATTEMPTS} attempts: {:?}",
+        dest.display(),
+        last_exists_err
+    ))
+}
+
+#[cfg(not(unix))]
+fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode) -> Result<()> {
+    // 비-Unix는 BLUEPRINT non-goal. best-effort(모드/원자성 보장 없음).
+    fs::write(dest, content).with_context(|| format!("failed to write {}", dest.display()))
 }
 
 /// 존재하는 최상위 조상까지 canonicalize(심링크 해석)한 뒤 비존재 tail 컴포넌트를 그대로

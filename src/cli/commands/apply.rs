@@ -1,7 +1,6 @@
 //! `apply` 실행.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -103,11 +102,6 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let answer_source = InquireAnswerSource;
     let condition_evaluator = MiniJinjaConditionEvaluator::new();
     let ignore_source = FsIgnoreSource::new(&renderer);
-
-    if !args.dry_run && args.target != "." {
-        fs::create_dir_all(&target_root)
-            .with_context(|| format!("failed to create target directory {}", target_root.display()))?;
-    }
 
     let report = apply(
         &req,

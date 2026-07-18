@@ -29,11 +29,13 @@ mod tests {
                     rel: safe_rel_path("README.md").unwrap(),
                     rendered: true,
                     content: b"# demo".to_vec(),
+                    mode: crate::domain::place::FileMode::base(),
                 },
                 PlannedWrite {
                     rel: safe_rel_path("src/main.rs").unwrap(),
                     rendered: false,
                     content: b"fn main(){}".to_vec(),
+                    mode: crate::domain::place::FileMode::base(),
                 },
             ],
         };
