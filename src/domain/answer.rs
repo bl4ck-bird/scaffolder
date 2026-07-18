@@ -29,11 +29,13 @@ pub struct ScaffolderBuiltins {
     pub username: String,
 }
 
-/// 답변 확정 후 불변 컨텍스트. 공개 setter가 없다 — `build_context`로만 생성한다.
+/// 답변 확정 후 불변 컨텍스트. 공개 setter가 없다 — `build_context`로만 생성한다. `data`는
+/// `None`이면 아직 병합 전(§1.9 step 3 이전)이라 렌더 컨텍스트에서 `data` 네임스페이스 자체가
+/// 부재한다 — `when` 평가(answer 확정 단계)에서 `data`를 참조하면 strict undefined로 에러난다.
 #[derive(Debug, Clone)]
 pub struct AnswerContext {
     answers: BTreeMap<String, AnswerValue>,
-    data: DataValue,
+    data: Option<DataValue>,
     builtins: ScaffolderBuiltins,
 }
 
@@ -46,15 +48,16 @@ impl AnswerContext {
         &self.builtins
     }
 
-    /// `data.*`로 노출되는 정적 데이터 트리(`[data]` + `data/*.toml` 병합 결과).
-    pub fn data(&self) -> &DataValue {
-        &self.data
+    /// `data.*`로 노출되는 정적 데이터 트리(`[data]` + `data/*.toml` 병합 결과). 병합 전이면
+    /// `None` — 이때 `data` 네임스페이스는 컨텍스트에서 부재다.
+    pub fn data(&self) -> Option<&DataValue> {
+        self.data.as_ref()
     }
 }
 
 pub fn build_context(
     answers: BTreeMap<String, AnswerValue>,
-    data: DataValue,
+    data: Option<DataValue>,
     builtins: ScaffolderBuiltins,
 ) -> AnswerContext {
     AnswerContext {
@@ -233,7 +236,7 @@ mod tests {
         let mut answers = std::collections::BTreeMap::new();
         answers.insert("license".to_string(), AnswerValue::Text("MIT".to_string()));
 
-        let ctx = build_context(answers, DataValue::empty_table(), builtins());
+        let ctx = build_context(answers, Some(DataValue::empty_table()), builtins());
 
         assert_eq!(
             ctx.answer("license"),

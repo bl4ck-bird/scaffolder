@@ -67,7 +67,7 @@ mod tests {
     fn ctx_with(name: &str, value: AnswerValue) -> AnswerContext {
         let mut answers = BTreeMap::new();
         answers.insert(name.to_string(), value);
-        build_context(answers, crate::domain::data::DataValue::empty_table(), builtins())
+        build_context(answers, None, builtins())
     }
 
     #[test]

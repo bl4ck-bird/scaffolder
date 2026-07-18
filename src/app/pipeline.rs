@@ -12,7 +12,7 @@ use crate::domain::answer::{
     build_context, coerce, validate_choice, AnswerSource, AnswerValue, ConditionEvaluator,
     ScaffolderBuiltins,
 };
-use crate::domain::data::{merge, DataSource, DataValue};
+use crate::domain::data::DataSource;
 use crate::domain::hook::Confirmer;
 use crate::domain::ignore::IgnoreSource;
 use crate::domain::manifest::ManifestSource;
@@ -76,10 +76,10 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         &builtins,
     )?;
 
-    // §1.9 step 3: answer 확정 이후 data(`[data]` + `data/*.toml`)를 병합한다.
-    let file_data = ports.data_source.load(&req.template_root)?;
-    let data = merge(manifest.data, file_data);
-    let ctx = build_context(answers, data, builtins);
+    // §1.9 step 3: answer 확정 이후 data를 병합한다. `[data]`(manifest)를 base로 `data/*.toml`을
+    // lexical 순서로 fold한다(단일 left-fold — §1.5).
+    let data = ports.data_source.load(&req.template_root, manifest.data)?;
+    let ctx = build_context(answers, Some(data), builtins);
     let matcher = ports.ignore_source.load(&req.template_root, &ctx)?;
 
     let files_root = req.template_root.join("files");
@@ -189,8 +189,8 @@ fn resolve_answers(
         let active = match &question.when {
             Some(when) => {
                 // §1.9: data 병합(step 3)은 answer 확정(step 2) 이후다. 따라서 `when`은 앞선
-                // 답변 + builtins만 참조하며 data는 아직 컨텍스트에 없다.
-                let ctx = build_context(resolved.clone(), DataValue::empty_table(), builtins.clone());
+                // 답변 + builtins만 참조하며 data 네임스페이스는 컨텍스트에서 부재다(None).
+                let ctx = build_context(resolved.clone(), None, builtins.clone());
                 ports.condition_evaluator.is_active(when, &ctx)?
             }
             None => true,
@@ -275,8 +275,12 @@ mod tests {
 
     struct FakeDataSource;
     impl DataSource for FakeDataSource {
-        fn load(&self, _template_root: &Path) -> Result<DataValue> {
-            Ok(DataValue::empty_table())
+        fn load(
+            &self,
+            _template_root: &Path,
+            base: crate::domain::data::DataValue,
+        ) -> Result<crate::domain::data::DataValue> {
+            Ok(base)
         }
     }
 

@@ -898,8 +898,9 @@ fn apply_dedup_lines_over_included_partial() {
 
 #[test]
 fn apply_when_cannot_reference_data() {
-    // §1.9: data는 answer 확정(step 2) 이후 병합(step 3)되므로 `when`은 data를 보지 못한다.
-    // 답변을 줘도 `when = "data.flag"`는 미정의 참조로 실패해야 한다(성공하면 when이 data를 본 것).
+    // §1.9: data는 answer 확정(step 2) 이후 병합(step 3)되므로 `when`은 data 네임스페이스 자체를
+    // 보지 못한다. 멤버 접근(`data.flag`)뿐 아니라 네임스페이스 참조(`not data`)도 미정의로 실패해야
+    // 한다(빈 테이블로 노출하면 `not data`가 성공해 우회 가능 — 그 우회를 잠근다).
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(
         template.path().join("scaffold.toml"),
@@ -910,7 +911,7 @@ fn apply_when_cannot_reference_data() {
             [[questions]]
             name = "extra"
             type = "string"
-            when = "data.flag"
+            when = "not data"
         "#,
     )
     .expect("write scaffold.toml");
@@ -930,4 +931,33 @@ fn apply_when_cannot_reference_data() {
         .arg("extra=given");
 
     cmd.assert().failure();
+}
+
+#[test]
+fn apply_broken_partial_fails_without_creating_target() {
+    // partial 등록(구문 컴파일)은 target 생성 전에 수행하므로, 잘못된 partial은 빈 target을
+    // 남기지 않고 실패해야 한다.
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let partials = template.path().join("partials");
+    fs::create_dir_all(&partials).expect("mkdir partials");
+    fs::write(partials.join("broken"), "{% if %}").expect("write broken partial");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
+
+    cmd.assert().failure();
+    assert!(
+        !target.exists(),
+        "a partial-load failure must not leave an empty target directory"
+    );
 }

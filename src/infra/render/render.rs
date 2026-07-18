@@ -80,7 +80,7 @@ impl Object for RenderContext {
             return Some(builtins_value(self.0.builtins()));
         }
         if key == "data" {
-            return Some(data_value(self.0.data()));
+            return self.0.data().map(data_value);
         }
         self.0.answer(key).map(answer_value)
     }
@@ -146,7 +146,7 @@ mod tests {
     fn renders_top_level_answer() {
         let mut answers = BTreeMap::new();
         answers.insert("name".to_string(), AnswerValue::Text("proj".to_string()));
-        let ctx = build_context(answers, DataValue::empty_table(), builtins());
+        let ctx = build_context(answers, Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer.render_str("hi {{ name }}", &ctx).unwrap();
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn renders_scaffolder_builtin() {
-        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
+        let ctx = build_context(BTreeMap::new(), Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer.render_str("{{ scaffolder.os }}", &ctx).unwrap();
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn env_missing_var_renders_empty() {
-        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
+        let ctx = build_context(BTreeMap::new(), Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn env_missing_var_uses_default() {
-        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
+        let ctx = build_context(BTreeMap::new(), Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn strict_undefined_errors_on_unknown_variable() {
-        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
+        let ctx = build_context(BTreeMap::new(), Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let result = renderer.render_str("{{ nope }}", &ctx);
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn trailing_newline_is_preserved() {
-        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
+        let ctx = build_context(BTreeMap::new(), Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer.render_str("line\n", &ctx).unwrap();
@@ -212,7 +212,7 @@ mod tests {
     fn int_answer_preserves_numeric_comparison() {
         let mut answers = BTreeMap::new();
         answers.insert("edition".to_string(), AnswerValue::Int(2021));
-        let ctx = build_context(answers, DataValue::empty_table(), builtins());
+        let ctx = build_context(answers, Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer
@@ -229,7 +229,7 @@ mod tests {
         unsafe {
             std::env::set_var("SC_TEST_PRESENT", "v");
         }
-        let ctx = build_context(BTreeMap::new(), DataValue::empty_table(), builtins());
+        let ctx = build_context(BTreeMap::new(), Some(DataValue::empty_table()), builtins());
 
         let renderer = MiniJinjaRenderer::new();
         let out = renderer

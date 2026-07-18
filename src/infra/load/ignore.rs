@@ -92,7 +92,7 @@ mod tests {
     fn ctx_with_stacks(stacks: Vec<String>) -> AnswerContext {
         let mut answers = BTreeMap::new();
         answers.insert("stacks".to_string(), crate::domain::answer::AnswerValue::List(stacks));
-        build_context(answers, crate::domain::data::DataValue::empty_table(), builtins())
+        build_context(answers, Some(crate::domain::data::DataValue::empty_table()), builtins())
     }
 
     struct NoopRenderer;

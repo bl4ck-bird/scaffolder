@@ -92,13 +92,10 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         dry_run: args.dry_run,
     };
 
-    if !args.dry_run && args.target != "." {
-        fs::create_dir_all(&target_root)
-            .with_context(|| format!("failed to create target directory {}", target_root.display()))?;
-    }
-
     let manifest_src = TomlManifestSource;
     let data_source = FsDataSource;
+    // partial 로드·렌더러 구성은 실패할 수 있으므로 target 생성 전에 수행한다 — 실패 시 빈
+    // target을 남기지 않는다.
     let partials = FsPartialSource.load(&req.template_root)?;
     let renderer = MiniJinjaRenderer::with_partials(partials)?;
     let payload = FsPayloadStore;
@@ -106,6 +103,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     let answer_source = InquireAnswerSource;
     let condition_evaluator = MiniJinjaConditionEvaluator::new();
     let ignore_source = FsIgnoreSource::new(&renderer);
+
+    if !args.dry_run && args.target != "." {
+        fs::create_dir_all(&target_root)
+            .with_context(|| format!("failed to create target directory {}", target_root.display()))?;
+    }
 
     let report = apply(
         &req,
