@@ -160,6 +160,7 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
             &planned_write.rel,
             &planned_write.content,
             planned_write.mode,
+            status.exists,
         )?;
     }
 
@@ -397,6 +398,7 @@ mod tests {
             rel: &RelPath,
             content: &[u8],
             _mode: crate::domain::place::FileMode,
+            _overwrite: bool,
         ) -> Result<()> {
             self.written.borrow_mut().push((rel.clone(), content.to_vec()));
             Ok(())

@@ -990,12 +990,12 @@ fn apply_applies_mode_prefix_permissions() {
         fs::metadata(target.join(name)).expect("stat").permissions().mode() & 0o777
     };
 
-    // umask에 무관한 불변식만 검사한다(umask는 비트를 추가로 제거만 하므로).
-    assert_eq!(mode("run.sh") & 0o100, 0o100, "executable_ sets owner-execute");
+    // umask에 무관한 "비트가 제거됨" 불변식만 검사한다(umask는 비트를 추가로 제거만 하므로 "set"
+    // 단언은 환경 의존적). 이 clear 불변식들은 mode 적용의 양성 증거다 — base(0o644)라면 남았을
+    // 비트가 제거됐음을 보인다. 정확한 비트값은 domain from_modes 테스트가 잠근다.
     assert_eq!(mode("secret.txt") & 0o077, 0, "private_ clears group/other bits");
     assert_eq!(mode("notes.md") & 0o222, 0, "readonly_ clears all write bits");
-    assert_eq!(mode("plain.txt") & 0o200, 0o200, "plain file is owner-writable");
-    assert_eq!(mode("plain.txt") & 0o111, 0, "plain file is not executable");
+    assert_eq!(mode("plain.txt") & 0o111, 0, "plain file has no execute bits");
 }
 
 #[test]

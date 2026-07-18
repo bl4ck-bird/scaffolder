@@ -22,14 +22,26 @@ impl PayloadStore for FsPayloadStore {
             .with_context(|| format!("payload source root {} does not exist", source_root.display()))?;
         let mut visited = HashSet::new();
         visited.insert(canonical_root.clone());
-        walk(source_root, source_root, &canonical_root, &mut visited, &mut entries)?;
+        walk(source_root, source_root, &canonical_root, &mut visited, &mut entries, 0)?;
         entries.sort_by(|a, b| a.rel.as_path().cmp(b.rel.as_path()));
         Ok(entries)
     }
 
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>> {
         let path = source_root.join(entry.rel.as_path());
-        fs::read(&path).with_context(|| format!("failed to read payload file {}", path.display()))
+        // 열거(walk)와 읽기 사이에 심링크가 외부로 교체됐을 수 있으므로 읽기 직전 containment를
+        // 재검증하고, 심링크를 재추종하지 않도록 canonical 경로에서 읽는다(source-side 갭 축소).
+        let canonical_root = source_root.canonicalize().with_context(|| {
+            format!("payload source root {} does not exist", source_root.display())
+        })?;
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("failed to resolve payload file {}", path.display()))?;
+        if !canonical.starts_with(&canonical_root) {
+            bail!("payload file {} resolves outside the source root", path.display());
+        }
+        fs::read(&canonical)
+            .with_context(|| format!("failed to read payload file {}", path.display()))
     }
 
     fn ensure_target(&self, target_root: &Path) -> Result<()> {
@@ -43,6 +55,7 @@ impl PayloadStore for FsPayloadStore {
         rel: &RelPath,
         content: &[u8],
         mode: FileMode,
+        overwrite: bool,
     ) -> Result<()> {
         let path = target_root.join(rel.as_path());
 
@@ -51,7 +64,7 @@ impl PayloadStore for FsPayloadStore {
                 .with_context(|| format!("failed to create parent directory for {}", path.display()))?;
         }
 
-        atomic_write(&path, content, mode)
+        atomic_write(&path, content, mode, overwrite)
     }
 
     fn dest_status(&self, target_root: &Path, rel: &RelPath) -> Result<DestStatus> {
@@ -84,6 +97,8 @@ impl PayloadStore for FsPayloadStore {
 /// temp 파일 고유 접미사용 프로세스-로컬 카운터.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_TEMP_ATTEMPTS: u32 = 32;
+/// payload 트리 재귀 depth 상한(심링크 alias·병적 깊이 backstop). 실제 템플릿은 훨씬 얕다.
+const MAX_WALK_DEPTH: u32 = 64;
 
 /// 같은 부모 디렉토리에 temp를 만들어 내용을 쓰고 `rename`으로 dest에 원자 교체한다.
 ///
@@ -94,7 +109,7 @@ const MAX_TEMP_ATTEMPTS: u32 = 32;
 /// - `rename`은 dest가 기존 심링크여도 심링크 자체를 원자 교체한다(대상 미추종) → target 밖 오염 없음.
 /// - 부분출력 없음: 실패 시 temp를 정리하고 dest는 이전 상태를 유지한다.
 #[cfg(unix)]
-fn atomic_write(dest: &Path, content: &[u8], mode: FileMode) -> Result<()> {
+fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
     let parent = dest
@@ -136,8 +151,21 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode) -> Result<()> {
         }
         drop(file);
 
-        if let Err(e) = fs::rename(&temp_path, dest) {
+        let placed = if overwrite {
+            // 기존 dest를 원자 교체(심링크면 링크 자체를 대체).
+            fs::rename(&temp_path, dest)
+        } else {
+            // dest가 새로 생겨야 한다. `hard_link`는 dest가 이미 있으면 EEXIST로 실패하므로, plan
+            // 이후 경쟁으로 생긴 파일을 조용히 덮지 않는다. 성공·실패 무관하게 temp 링크를 제거한다.
+            let result = fs::hard_link(&temp_path, dest);
             let _ = fs::remove_file(&temp_path);
+            result
+        };
+        if let Err(e) = placed {
+            // overwrite(rename) 실패 시 temp가 남으므로 정리한다. non-overwrite는 위에서 이미 제거됨.
+            if overwrite {
+                let _ = fs::remove_file(&temp_path);
+            }
             return Err(e).with_context(|| format!("failed to place {}", dest.display()));
         }
         return Ok(());
@@ -151,7 +179,7 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode) -> Result<()> {
+fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode, _overwrite: bool) -> Result<()> {
     // 비-Unix는 BLUEPRINT non-goal. best-effort(모드/원자성 보장 없음).
     fs::write(dest, content).with_context(|| format!("failed to write {}", dest.display()))
 }
@@ -207,7 +235,12 @@ fn walk(
     canonical_root: &Path,
     visited: &mut HashSet<PathBuf>,
     out: &mut Vec<PayloadEntry>,
+    depth: u32,
 ) -> Result<()> {
+    // 병적으로 깊은(또는 심링크 alias로 부풀려진) 트리에 대한 backstop.
+    if depth > MAX_WALK_DEPTH {
+        bail!("payload tree exceeds max depth {MAX_WALK_DEPTH} at {}", dir.display());
+    }
     let read_dir =
         fs::read_dir(dir).with_context(|| format!("failed to read directory {}", dir.display()))?;
 
@@ -218,11 +251,14 @@ fn walk(
             .file_type()
             .with_context(|| format!("failed to stat {}", path.display()))?;
 
+        // 파일명은 렌더·출력 경로에 UTF-8로 쓰이므로 비-UTF8 경로는 lossy 변환(다른 이름과 충돌)
+        // 대신 거부한다(fail-loud).
         let rel_str = path
             .strip_prefix(source_root)
             .with_context(|| format!("failed to compute relative path for {}", path.display()))?
-            .to_string_lossy()
-            .into_owned();
+            .to_str()
+            .ok_or_else(|| anyhow!("payload path {} is not valid UTF-8", path.display()))?
+            .to_string();
         let rel = safe_rel_path(&rel_str)?;
 
         if file_type.is_symlink() {
@@ -246,7 +282,7 @@ fn walk(
                     rel: rel.clone(),
                     is_dir: true,
                 });
-                walk(source_root, &path, canonical_root, visited, out)?;
+                walk(source_root, &path, canonical_root, visited, out, depth + 1)?;
                 visited.remove(&canonical_target);
             } else {
                 out.push(PayloadEntry { rel, is_dir: false });
@@ -256,7 +292,7 @@ fn walk(
                 rel: rel.clone(),
                 is_dir: true,
             });
-            walk(source_root, &path, canonical_root, visited, out)?;
+            walk(source_root, &path, canonical_root, visited, out, depth + 1)?;
         } else {
             out.push(PayloadEntry { rel, is_dir: false });
         }
@@ -390,11 +426,35 @@ mod tests {
         let rel = safe_rel_path("sub/nested/file.txt").unwrap();
 
         FsPayloadStore
-            .write_file(target.path(), &rel, b"payload", FileMode::base())
+            .write_file(target.path(), &rel, b"payload", FileMode::base(), false)
             .expect("write_file");
 
         let written = fs::read(target.path().join("sub/nested/file.txt")).expect("read back");
         assert_eq!(written, b"payload");
+    }
+
+    #[test]
+    fn write_file_no_overwrite_fails_when_dest_exists() {
+        let target = tempfile::tempdir().expect("tempdir");
+        let rel = safe_rel_path("file.txt").unwrap();
+        fs::write(target.path().join("file.txt"), b"pre-existing").expect("seed");
+
+        // overwrite=false인데 dest가 이미 있으면(plan 이후 경쟁 생성 등) 조용히 덮지 않고 실패한다.
+        let result =
+            FsPayloadStore.write_file(target.path(), &rel, b"new", FileMode::base(), false);
+        assert!(result.is_err(), "no-clobber create must fail when dest exists");
+
+        // 기존 내용 보존.
+        assert_eq!(
+            fs::read(target.path().join("file.txt")).unwrap(),
+            b"pre-existing"
+        );
+        // temp 파일 잔여 없음.
+        let leftover = fs::read_dir(target.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
+        assert!(!leftover, "no temp file should remain after a failed no-clobber write");
     }
 
     #[test]
@@ -404,7 +464,7 @@ mod tests {
         fs::write(target.path().join("file.txt"), b"old content").expect("seed file");
 
         FsPayloadStore
-            .write_file(target.path(), &rel, b"new content", FileMode::base())
+            .write_file(target.path(), &rel, b"new content", FileMode::base(), true)
             .expect("write_file");
 
         let written = fs::read(target.path().join("file.txt")).expect("read back");
@@ -423,7 +483,7 @@ mod tests {
 
         let rel = safe_rel_path("link.txt").unwrap();
         FsPayloadStore
-            .write_file(target.path(), &rel, b"new payload", FileMode::base())
+            .write_file(target.path(), &rel, b"new payload", FileMode::base(), true)
             .expect("write_file");
 
         // 심링크 대상(target 밖)은 오염되지 않아야 한다.

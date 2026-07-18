@@ -116,12 +116,15 @@ pub trait PayloadStore {
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>>;
     /// target 디렉토리를 보장한다(부재 시 생성). §1.9 step 6 — plan 이후 write 직전에 호출한다.
     fn ensure_target(&self, target_root: &Path) -> Result<()>;
+    /// payload 파일 하나를 원자적으로 쓴다. `overwrite`가 false면 dest가 새로 생겨야 하며, 경쟁으로
+    /// dest가 먼저 생기면 조용히 덮지 않고 실패한다(no-clobber). true면 기존 dest를 원자 교체한다.
     fn write_file(
         &self,
         target_root: &Path,
         rel: &RelPath,
         content: &[u8],
         mode: FileMode,
+        overwrite: bool,
     ) -> Result<()>;
     fn dest_status(&self, target_root: &Path, rel: &RelPath) -> Result<DestStatus>;
 }
@@ -185,5 +188,26 @@ mod tests {
         // exec(|0o111) → private(&^0o77) → readonly(&^0o222): 0o777→0o700→0o500(execute 유지, write 제거).
         let m = FileMode::from_modes(&[Mode::Readonly, Mode::Executable, Mode::Private]);
         assert_eq!(m.bits(), 0o500);
+    }
+
+    #[test]
+    fn from_modes_two_way_combos() {
+        use crate::domain::name::Mode;
+        // §1.3 전체 계약을 잠근다(umask 전 8개 결과 중 2-way 조합).
+        // exec+readonly: 0o777 &^0o222 = 0o555.
+        assert_eq!(
+            FileMode::from_modes(&[Mode::Executable, Mode::Readonly]).bits(),
+            0o555
+        );
+        // private+readonly: 0o600 &^0o222 = 0o400.
+        assert_eq!(
+            FileMode::from_modes(&[Mode::Private, Mode::Readonly]).bits(),
+            0o400
+        );
+        // exec+private: 0o777 &^0o77 = 0o700.
+        assert_eq!(
+            FileMode::from_modes(&[Mode::Executable, Mode::Private]).bits(),
+            0o700
+        );
     }
 }
