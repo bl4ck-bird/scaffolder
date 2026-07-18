@@ -18,7 +18,23 @@ impl SourceRootSource for FsSourceRootSource {
         let marker = template_root.join(".scaffoldroot");
         let content = match fs::read_to_string(&marker) {
             Ok(content) => content,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(template_root.to_path_buf()),
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                // "파일 없음"과 "존재하는 (dangling) 심링크의 대상 없음"을 구분한다 — 둘 다
+                // `read_to_string`에서 NotFound다. marker 자체가 존재하면(심링크 포함) fail-loud.
+                match marker.symlink_metadata() {
+                    Err(meta_err) if meta_err.kind() == ErrorKind::NotFound => {
+                        return Ok(template_root.to_path_buf());
+                    }
+                    _ => {
+                        return Err(e).with_context(|| {
+                            format!(
+                                ".scaffoldroot at {} exists but could not be read (dangling symlink?)",
+                                marker.display()
+                            )
+                        });
+                    }
+                }
+            }
             Err(e) => {
                 return Err(e).with_context(|| format!("failed to read {}", marker.display()));
             }
@@ -102,6 +118,14 @@ mod tests {
     fn rejects_absolute_path() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join(".scaffoldroot"), "/etc").unwrap();
+        assert!(FsSourceRootSource.resolve(dir.path()).is_err());
+    }
+
+    #[test]
+    fn rejects_dangling_scaffoldroot_symlink() {
+        let dir = TempDir::new().unwrap();
+        // `.scaffoldroot` 자체가 없는 대상을 가리키는 심링크: "부재"로 처리하지 말고 에러.
+        symlink(dir.path().join("nowhere"), dir.path().join(".scaffoldroot")).unwrap();
         assert!(FsSourceRootSource.resolve(dir.path()).is_err());
     }
 
