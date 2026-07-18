@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use crate::domain::render::PartialSource;
 
@@ -35,10 +35,14 @@ fn collect(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) -> Resul
         if file_type.is_dir() {
             collect(root, &path, out)?;
         } else {
-            let name = path
+            let rel = path
                 .strip_prefix(root)
-                .with_context(|| format!("partial path {} escaped partials root", path.display()))?
-                .to_string_lossy()
+                .with_context(|| format!("partial path {} escaped partials root", path.display()))?;
+            // 이름은 `{% include %}`에서 UTF-8 문자열로 참조되므로 비-UTF8 경로는 lossy 변환 시
+            // 다른 파일과 같은 이름으로 축약돼 조용히 덮어쓸 수 있다 — fail-loud로 거부한다.
+            let name = rel
+                .to_str()
+                .ok_or_else(|| anyhow!("partial name {} is not valid UTF-8", rel.display()))?
                 .replace('\\', "/");
             let source = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read partial {}", path.display()))?;
