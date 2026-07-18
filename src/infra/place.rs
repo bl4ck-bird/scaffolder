@@ -1,12 +1,13 @@
 //! 파일 쓰기(mode·umask·심링크 방어·containment) — `PayloadStore`.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::domain::place::{safe_rel_path, DestStatus, FileMode, PayloadEntry, PayloadStore, RelPath};
 
@@ -16,7 +17,12 @@ pub struct FsPayloadStore;
 impl PayloadStore for FsPayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>> {
         let mut entries = Vec::new();
-        walk(source_root, source_root, &mut entries)?;
+        let canonical_root = source_root
+            .canonicalize()
+            .with_context(|| format!("payload source root {} does not exist", source_root.display()))?;
+        let mut visited = HashSet::new();
+        visited.insert(canonical_root.clone());
+        walk(source_root, source_root, &canonical_root, &mut visited, &mut entries)?;
         entries.sort_by(|a, b| a.rel.as_path().cmp(b.rel.as_path()));
         Ok(entries)
     }
@@ -177,7 +183,17 @@ fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-fn walk(source_root: &Path, dir: &Path, out: &mut Vec<PayloadEntry>) -> Result<()> {
+/// payload를 열거한다. target 안(=source root 안)을 가리키는 심링크는 dereference한다(§1.10):
+/// 디렉토리 심링크는 재귀, 파일 심링크는 target 내용을 읽는다(`read_content`의 `fs::read`가 추종).
+/// source root 밖을 가리키는 심링크는 외부 내용 유입이므로 거부한다(fail-loud). 디렉토리 심링크로
+/// 생기는 cycle은 canonical 경로 추적으로 탐지해 에러낸다.
+fn walk(
+    source_root: &Path,
+    dir: &Path,
+    canonical_root: &Path,
+    visited: &mut HashSet<PathBuf>,
+    out: &mut Vec<PayloadEntry>,
+) -> Result<()> {
     let read_dir =
         fs::read_dir(dir).with_context(|| format!("failed to read directory {}", dir.display()))?;
 
@@ -195,12 +211,38 @@ fn walk(source_root: &Path, dir: &Path, out: &mut Vec<PayloadEntry>) -> Result<(
             .into_owned();
         let rel = safe_rel_path(&rel_str)?;
 
-        if file_type.is_dir() {
+        if file_type.is_symlink() {
+            // 심링크는 최종 위치를 canonical로 해석해 source root 안인지 판정한다.
+            let canonical_target = path.canonicalize().with_context(|| {
+                format!("failed to resolve payload symlink {}", path.display())
+            })?;
+            if !canonical_target.starts_with(canonical_root) {
+                bail!(
+                    "payload symlink {} points outside the source root",
+                    path.display()
+                );
+            }
+            let target_meta = fs::metadata(&path)
+                .with_context(|| format!("failed to stat symlink target for {}", path.display()))?;
+            if target_meta.is_dir() {
+                if !visited.insert(canonical_target.clone()) {
+                    bail!("payload symlink cycle detected at {}", path.display());
+                }
+                out.push(PayloadEntry {
+                    rel: rel.clone(),
+                    is_dir: true,
+                });
+                walk(source_root, &path, canonical_root, visited, out)?;
+                visited.remove(&canonical_target);
+            } else {
+                out.push(PayloadEntry { rel, is_dir: false });
+            }
+        } else if file_type.is_dir() {
             out.push(PayloadEntry {
                 rel: rel.clone(),
                 is_dir: true,
             });
-            walk(source_root, &path, out)?;
+            walk(source_root, &path, canonical_root, visited, out)?;
         } else {
             out.push(PayloadEntry { rel, is_dir: false });
         }
@@ -235,6 +277,58 @@ mod tests {
             .find(|e| e.rel.to_string() == "sub/b.txt")
             .unwrap();
         assert!(!b_entry.is_dir);
+    }
+
+    #[test]
+    fn list_entries_dereferences_inside_directory_symlink() {
+        let source = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(source.path().join("real")).expect("mkdir real");
+        fs::write(source.path().join("real/x.txt"), b"x").expect("write x");
+        symlink(source.path().join("real"), source.path().join("link")).expect("symlink dir");
+
+        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
+        let rels: Vec<String> = entries.iter().map(|e| e.rel.to_string()).collect();
+
+        // 심링크 디렉토리가 dereference되어 하위가 열거된다.
+        assert!(rels.contains(&"link".to_string()));
+        assert!(rels.contains(&"link/x.txt".to_string()));
+        let link_entry = entries.iter().find(|e| e.rel.to_string() == "link").unwrap();
+        assert!(link_entry.is_dir);
+    }
+
+    #[test]
+    fn list_entries_reads_inside_file_symlink_content() {
+        let source = tempfile::tempdir().expect("tempdir");
+        fs::write(source.path().join("real.txt"), b"real-content").expect("write real");
+        symlink(source.path().join("real.txt"), source.path().join("link.txt")).expect("symlink");
+
+        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
+        let link = entries.iter().find(|e| e.rel.to_string() == "link.txt").unwrap();
+        assert!(!link.is_dir);
+        let content = FsPayloadStore.read_content(source.path(), link).expect("read");
+        assert_eq!(content, b"real-content");
+    }
+
+    #[test]
+    fn list_entries_rejects_symlink_pointing_outside_source_root() {
+        let source = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        fs::write(outside.path().join("secret"), b"s").expect("write outside");
+        symlink(outside.path().join("secret"), source.path().join("leak")).expect("symlink out");
+
+        let result = FsPayloadStore.list_entries(source.path());
+        assert!(result.is_err(), "external payload symlink must be rejected");
+    }
+
+    #[test]
+    fn list_entries_detects_directory_symlink_cycle() {
+        let source = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(source.path().join("sub")).expect("mkdir sub");
+        // sub/loop → source root(조상)을 가리켜 cycle을 만든다.
+        symlink(source.path(), source.path().join("sub/loop")).expect("symlink cycle");
+
+        let result = FsPayloadStore.list_entries(source.path());
+        assert!(result.is_err(), "directory symlink cycle must be detected");
     }
 
     #[test]
