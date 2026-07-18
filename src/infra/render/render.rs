@@ -9,7 +9,7 @@ use minijinja::{Environment, UndefinedBehavior};
 
 use crate::domain::answer::{AnswerContext, AnswerValue, ScaffolderBuiltins};
 use crate::domain::data::DataValue;
-use crate::domain::render::Renderer;
+use crate::domain::render::{Renderer, SyntaxChecker};
 
 /// MiniJinja 기반 `Renderer`. strict undefined와 `scaffolder.*`/`env()` 빌트인을 배선한다.
 pub struct MiniJinjaRenderer {
@@ -65,6 +65,42 @@ impl Renderer for MiniJinjaRenderer {
 
 fn env_fn(name: String, default: Option<String>) -> String {
     std::env::var(&name).unwrap_or_else(|_| default.unwrap_or_default())
+}
+
+/// MiniJinja 기반 `SyntaxChecker`. 컴파일(파스)만 하고 렌더/평가는 하지 않으므로 strict-undefined
+/// 변수 참조는 걸리지 않는다 — `template validate`가 런타임 미정의를 false positive로 보고하지
+/// 않기 위한 의도적 설계다.
+pub struct MiniJinjaSyntaxChecker {
+    env: Environment<'static>,
+}
+
+impl MiniJinjaSyntaxChecker {
+    pub fn new() -> Self {
+        Self { env: base_environment() }
+    }
+}
+
+impl Default for MiniJinjaSyntaxChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SyntaxChecker for MiniJinjaSyntaxChecker {
+    fn check_template(&self, source: &str) -> Result<()> {
+        // 매 호출 스크래치 environment에 등록해 파스 에러만 잡는다 — 등록된 템플릿을 누적하지
+        // 않는다(반복 validate 호출 간 상태 오염 방지). minijinja 에러를 그대로 anyhow로
+        // 올린다 — 자체 Display가 이미 "syntax error"와 위치를 담으므로 추가 context로
+        // 가리지 않는다.
+        let mut env = base_environment();
+        env.add_template_owned("__scaffolder_validate__".to_string(), source.to_string())?;
+        Ok(())
+    }
+
+    fn check_expression(&self, source: &str) -> Result<()> {
+        self.env.compile_expression_owned(source.to_string())?;
+        Ok(())
+    }
 }
 
 /// `AnswerContext`를 이름 기반 동적 조회로 노출한다. 포트가 전체 열거 API를 제공하지 않으므로
@@ -241,5 +277,36 @@ mod tests {
         }
 
         assert_eq!(out, "v");
+    }
+
+    #[test]
+    fn syntax_checker_accepts_valid_template() {
+        let checker = MiniJinjaSyntaxChecker::new();
+        assert!(checker.check_template("hi {{ name }}").is_ok());
+    }
+
+    #[test]
+    fn syntax_checker_rejects_malformed_template() {
+        let checker = MiniJinjaSyntaxChecker::new();
+        assert!(checker.check_template("{% if unterminated %}").is_err());
+    }
+
+    #[test]
+    fn syntax_checker_does_not_error_on_undefined_variable_reference() {
+        // 파스 단계는 strict-undefined를 적용하지 않는다 — 런타임 미정의는 검사 대상이 아니다.
+        let checker = MiniJinjaSyntaxChecker::new();
+        assert!(checker.check_template("{{ totally_undefined_var }}").is_ok());
+    }
+
+    #[test]
+    fn syntax_checker_accepts_valid_expression() {
+        let checker = MiniJinjaSyntaxChecker::new();
+        assert!(checker.check_expression("edition >= 2021").is_ok());
+    }
+
+    #[test]
+    fn syntax_checker_rejects_malformed_expression() {
+        let checker = MiniJinjaSyntaxChecker::new();
+        assert!(checker.check_expression("edition >=").is_err());
     }
 }

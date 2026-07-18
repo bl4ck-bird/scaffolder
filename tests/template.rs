@@ -1,5 +1,5 @@
-//! `scaffolder template list`/`new` e2e: 정렬 출력, 빈 스토어 안내, 중복 name base 힌트,
-//! 신규 템플릿 뼈대 생성.
+//! `scaffolder template list`/`new`/`validate` e2e: 정렬 출력, 빈 스토어 안내, 중복 name base 힌트,
+//! 신규 템플릿 뼈대 생성, 정적 검사 리포트+종료코드.
 
 use std::fs;
 
@@ -166,4 +166,178 @@ fn template_new_rejects_invalid_name() {
         .assert()
         .failure()
         .stderr(contains("single path component"));
+}
+
+fn validate_cmd(store_dir: &std::path::Path, fake_home: &std::path::Path) -> Command {
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.env("SCAFFOLDER_HOME", "")
+        .env("XDG_CONFIG_HOME", "")
+        .env("HOME", fake_home)
+        .arg("template")
+        .arg("validate")
+        .arg("--template-dir")
+        .arg(store_dir);
+    cmd
+}
+
+#[test]
+fn template_validate_passes_new_simple_skeleton() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .success();
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("demo: OK"), "stdout: {stdout}");
+}
+
+#[test]
+fn template_validate_passes_new_full_skeleton() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("demo-full")
+        .arg("--full")
+        .assert()
+        .success();
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .arg("demo-full")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("demo-full: OK"), "stdout: {stdout}");
+}
+
+#[test]
+fn template_validate_no_names_validates_whole_store() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("alpha")
+        .assert()
+        .success();
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("beta")
+        .assert()
+        .success();
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path()).assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("alpha: OK"), "stdout: {stdout}");
+    assert!(stdout.contains("beta: OK"), "stdout: {stdout}");
+}
+
+#[test]
+fn template_validate_empty_store_prints_guidance_and_succeeds() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+
+    validate_cmd(store_dir.path(), fake_home.path())
+        .assert()
+        .success()
+        .stdout(contains("No templates to validate"));
+}
+
+#[test]
+fn template_validate_reports_invalid_type_finding() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .success();
+
+    let manifest_path = store_dir.path().join("demo/scaffold.toml");
+    let manifest = fs::read_to_string(&manifest_path).expect("read manifest");
+    fs::write(&manifest_path, manifest.replace("type = \"string\"", "type = \"bogus\""))
+        .expect("corrupt manifest with invalid type");
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("demo:"), "stdout: {stdout}");
+    assert!(stdout.contains("[manifest]"), "stdout: {stdout}");
+    // 근본 원인이 노출돼야 한다 — top-level context만으로 묻히면 안 된다.
+    assert!(stdout.contains("unknown type"), "stdout: {stdout}");
+    assert!(stdout.contains("\"bogus\""), "stdout: {stdout}");
+    assert!(stdout.matches("scaffold.toml").count() == 1, "path should not be duplicated, stdout: {stdout}");
+}
+
+#[test]
+fn template_validate_reports_jinja_syntax_error() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .success();
+
+    fs::write(
+        store_dir.path().join("demo/files/README.md.jinja"),
+        "{% if unterminated %}",
+    )
+    .expect("corrupt jinja file with unterminated block");
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("demo:"), "stdout: {stdout}");
+    assert!(stdout.contains("[template-syntax]"), "stdout: {stdout}");
+    // minijinja의 구체 진단이 보여야 한다(정확한 line/col 문구에는 결합하지 않는다).
+    assert!(stdout.contains("syntax error"), "stdout: {stdout}");
+}
+
+#[test]
+fn template_validate_reports_unregistered_include() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .success();
+
+    fs::write(
+        store_dir.path().join("demo/files/README.md.jinja"),
+        "{% include \"missing\" %}",
+    )
+    .expect("corrupt jinja file with unregistered include");
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("demo:"), "stdout: {stdout}");
+    assert!(stdout.contains("[partial-reference]"), "stdout: {stdout}");
+    assert!(stdout.contains("missing"), "stdout: {stdout}");
+}
+
+#[test]
+fn template_validate_unknown_name_fails_but_reports_others() {
+    let store_dir = tempfile::tempdir().expect("store tempdir");
+    let fake_home = tempfile::tempdir().expect("fake home tempdir");
+    new_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .assert()
+        .success();
+
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .arg("demo")
+        .arg("ghost")
+        .assert()
+        .failure();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(stdout.contains("demo: OK"), "stdout: {stdout}");
+    assert!(stdout.contains("ghost"), "stdout: {stdout}");
 }

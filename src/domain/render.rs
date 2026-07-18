@@ -1,4 +1,4 @@
-//! `Renderer`·`PartialSource` 포트.
+//! `Renderer`·`PartialSource`·`SyntaxChecker` 포트.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -17,4 +17,11 @@ pub trait Renderer {
 /// 부재면 빈 맵.
 pub trait PartialSource {
     fn load(&self, template_root: &Path) -> Result<BTreeMap<String, String>>;
+}
+
+/// 렌더/평가 없이 문법만 컴파일 검사하는 포트(`template validate` 정적 검사용). strict-undefined
+/// 변수 참조는 파스 단계에서 걸리지 않으므로 검사 대상이 아니다(런타임 미정의 false positive 회피).
+pub trait SyntaxChecker {
+    fn check_template(&self, source: &str) -> Result<()>;
+    fn check_expression(&self, source: &str) -> Result<()>;
 }
