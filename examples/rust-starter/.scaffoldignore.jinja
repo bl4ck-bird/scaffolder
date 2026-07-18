@@ -1,0 +1,6 @@
+{% if 'docker' not in stacks %}
+Dockerfile
+{% endif -%}
+{% if 'ci' not in stacks %}
+.github/
+{% endif -%}

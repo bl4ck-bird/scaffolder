@@ -1,0 +1,16 @@
+# {{ scaffolder.name }}
+
+Rust starter scaffolded by `scaffolder`.
+
+- Edition: {{ edition }}
+- License: {{ license }}
+- MSRV: {{ data.msrv }}
+{% if stacks %}
+- Stacks: {{ stacks | join(", ") }}
+{% endif %}
+
+## Build
+
+```sh
+./scripts/build.sh
+```

@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          # Intel x86_64 (macos-13 retired 2025-12; macos-15-intel is the current Intel image)
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-14
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scaffolder-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/scaffolder
+          if-no-files-found: error
+
+  verify-publish:
+    name: cargo publish --dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Dry-run publish check
+        run: cargo publish --dry-run
+
+  # Actual publish is intentionally disabled: first crates.io
+  # publish is a deliberate, irreversible act pending explicit user
+  # approval. Flip `if: false` to `if: true` and provide
+  # CARGO_REGISTRY_TOKEN only after that approval.
+  publish:
+    name: cargo publish (disabled)
+    needs: [build, verify-publish]
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

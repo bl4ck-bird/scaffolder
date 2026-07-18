@@ -1,0 +1,9 @@
+{% filter dedup_lines -%}
+# Rust
+/target
+Cargo.lock
+*.log
+{% if 'docker' in stacks %}
+{% include "gitignore-docker" %}
+{% endif %}
+{% endfilter %}

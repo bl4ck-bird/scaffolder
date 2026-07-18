@@ -1,0 +1,21 @@
+[[questions]]
+name = "stacks"
+type = "multiselect"
+prompt = "Optional stacks to include"
+choices = ["docker", "ci"]
+default = []
+
+[[questions]]
+name = "edition"
+type = "string"
+prompt = "Rust edition"
+default = "2021"
+
+[[questions]]
+name = "license"
+type = "string"
+prompt = "License"
+default = "MIT"
+
+[data]
+category = "cli"

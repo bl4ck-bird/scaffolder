@@ -1,0 +1,5 @@
+# Docker
+/target
+*.log
+.dockerignore.local
+.env

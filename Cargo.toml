@@ -2,6 +2,14 @@
 name = "scaffolder"
 version = "0.1.0"
 edition = "2024"
+description = "선언형 프로젝트 스캐폴딩 CLI — 단일 Rust 바이너리, 런타임 의존 0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bl4ck-bird/scaffolder"
+readme = "README.md"
+keywords = ["scaffold", "template", "cli", "generator", "boilerplate"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.85"
+exclude = [".ai-harness/", ".claude/", "AGENTS.md", "CLAUDE.md", "GEMINI.md"]
 
 [dependencies]
 anyhow = "1.0.103"
