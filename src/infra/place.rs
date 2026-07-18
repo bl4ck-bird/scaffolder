@@ -156,10 +156,24 @@ fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode) -> Result<()> {
     fs::write(dest, content).with_context(|| format!("failed to write {}", dest.display()))
 }
 
-/// 존재하는 최상위 조상까지 canonicalize(심링크 해석)한 뒤 비존재 tail 컴포넌트를 그대로
-/// 재결합한다. `path` 전체가 존재하면 최종 심링크까지 포함해 통째로 해석된다.
+/// 최종 기록 위치를 해석한다. 최종 컴포넌트는 `atomic_write`가 제자리에서 원자 교체하므로
+/// **dereference하지 않고**, 부모(중간 컴포넌트)만 심링크를 따라 해석한 뒤 최종 basename을 그대로
+/// 붙인다. 이렇게 하면 최종 컴포넌트가 외부를 가리키는 기존 심링크여도 containment는 target 안으로
+/// 판정되어 §1.10대로 overwrite(제자리 교체)로 처리된다 — 중간 컴포넌트 심링크만 외부쓰기 대상이다.
 fn resolve_final_path(path: &Path) -> Result<PathBuf> {
-    let mut existing = path.to_path_buf();
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(file_name)) => {
+            let resolved_parent = resolve_existing_ancestor(parent)?;
+            Ok(resolved_parent.join(file_name))
+        }
+        _ => Ok(path.to_path_buf()),
+    }
+}
+
+/// 존재하는 최상위 조상까지 canonicalize(심링크 해석)한 뒤 비존재 tail 컴포넌트를 재결합한다.
+/// 디렉토리 경로 해석에만 쓴다(중간 컴포넌트 심링크는 따라간다).
+fn resolve_existing_ancestor(dir: &Path) -> Result<PathBuf> {
+    let mut existing = dir.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
 
     while !existing.exists() {
@@ -321,6 +335,29 @@ mod tests {
     }
 
     #[test]
+    fn list_entries_allows_noncyclic_diamond_symlinks() {
+        // 두 심링크가 같은 real dir을 가리키지만 순환은 아니다 — cycle로 오탐하면 안 된다.
+        let source = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(source.path().join("real")).expect("mkdir real");
+        fs::write(source.path().join("real/x.txt"), b"x").expect("write x");
+        symlink(source.path().join("real"), source.path().join("link_a")).expect("link_a");
+        symlink(source.path().join("real"), source.path().join("link_b")).expect("link_b");
+
+        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
+        let rels: Vec<String> = entries.iter().map(|e| e.rel.to_string()).collect();
+        assert!(rels.contains(&"link_a/x.txt".to_string()));
+        assert!(rels.contains(&"link_b/x.txt".to_string()));
+    }
+
+    #[test]
+    fn list_entries_errors_on_broken_payload_symlink() {
+        let source = tempfile::tempdir().expect("tempdir");
+        symlink(source.path().join("missing"), source.path().join("dangling")).expect("symlink");
+        let result = FsPayloadStore.list_entries(source.path());
+        assert!(result.is_err(), "broken payload symlink must fail loud");
+    }
+
+    #[test]
     fn list_entries_detects_directory_symlink_cycle() {
         let source = tempfile::tempdir().expect("tempdir");
         fs::create_dir(source.path().join("sub")).expect("mkdir sub");
@@ -449,6 +486,12 @@ mod tests {
 
         assert!(status.exists);
         assert!(status.is_symlink);
-        assert!(!status.inside_target);
+        // 최종 컴포넌트 심링크는 제자리 교체되므로 target 안(overwrite)으로 판정된다 — 외부를
+        // 가리켜도 rename은 링크 자체를 대체하고 대상을 건드리지 않는다(§1.10).
+        assert!(status.inside_target);
+        assert_eq!(
+            status.final_path,
+            target.path().canonicalize().unwrap().join("link.txt")
+        );
     }
 }

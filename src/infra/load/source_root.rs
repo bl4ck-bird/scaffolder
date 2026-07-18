@@ -84,6 +84,14 @@ mod tests {
     }
 
     #[test]
+    fn empty_or_whitespace_scaffoldroot_falls_back_to_template_root() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(".scaffoldroot"), "   \n").unwrap();
+        let resolved = FsSourceRootSource.resolve(dir.path()).unwrap();
+        assert_eq!(resolved, dir.path());
+    }
+
+    #[test]
     fn rejects_parent_dir_escape() {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join(".scaffoldroot"), "../outside").unwrap();

@@ -1057,3 +1057,43 @@ fn apply_uses_scaffoldroot_effective_source_root() {
     // repo top의 README는 템플릿 payload가 아니므로 배치되지 않는다.
     assert!(!target.join("README.md").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn apply_force_replaces_existing_external_symlink_dest_in_place() {
+    use std::os::unix::fs::symlink;
+
+    // target에 외부 파일을 가리키는 기존 심링크가 있고 템플릿이 같은 이름을 쓴다. §1.10대로 이는
+    // 외부쓰기가 아니라 overwrite(제자리 교체)여야 한다 — `--force`로 링크가 일반 파일로 교체되고
+    // 외부 대상은 불변이어야 한다.
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("data.txt"), "generated").expect("write payload");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external = outside.path().join("secret.txt");
+    fs::write(&external, "SECRET").expect("seed external");
+
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+    fs::create_dir_all(&target).expect("mkdir target");
+    symlink(&external, target.join("data.txt")).expect("seed dest symlink");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--force");
+    cmd.assert().success();
+
+    let meta = fs::symlink_metadata(target.join("data.txt")).expect("stat dest");
+    assert!(!meta.file_type().is_symlink(), "dest symlink must be replaced by a regular file");
+    assert_eq!(
+        fs::read_to_string(target.join("data.txt")).unwrap(),
+        "generated"
+    );
+    assert_eq!(fs::read_to_string(&external).unwrap(), "SECRET", "external target must be untouched");
+}
