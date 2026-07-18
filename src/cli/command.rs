@@ -1,9 +1,10 @@
 //! 루트 `Cli`(clap Parser)와 top-level 디스패치.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::cli::commands::apply::{self, ApplyArgs};
+use crate::cli::commands::template::list::{self, ListArgs};
 
 #[derive(Debug, Parser)]
 #[command(name = "scaffolder", version, about = "선언형 프로젝트 스캐폴딩 CLI")]
@@ -16,11 +17,28 @@ struct Cli {
 enum Command {
     /// 템플릿을 target에 적용한다.
     Apply(ApplyArgs),
+    /// 템플릿 스토어를 다룬다.
+    Template(TemplateArgs),
+}
+
+#[derive(Debug, Args)]
+struct TemplateArgs {
+    #[command(subcommand)]
+    command: TemplateCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TemplateCommand {
+    /// 스토어의 템플릿 목록을 출력한다.
+    List(ListArgs),
 }
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Apply(args) => apply::run(args),
+        Command::Template(args) => match args.command {
+            TemplateCommand::List(args) => list::run(args),
+        },
     }
 }

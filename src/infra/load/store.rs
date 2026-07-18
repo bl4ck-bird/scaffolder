@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
-use crate::domain::store::TemplateStore;
+use crate::domain::store::{TemplateCatalog, TemplateListing, TemplateStore};
 
 /// `--template-dir` > `$SCAFFOLDER_HOME` > `$XDG_CONFIG_HOME/scaffolder` > `~/.scaffolder`
 /// 순으로 스토어를 조회하는 `TemplateStore`.
@@ -75,6 +75,40 @@ impl TemplateStore for FsTemplateStore {
             .collect::<Vec<_>>()
             .join(", ");
         bail!("template {name_or_path:?} not found; searched: [{searched}]");
+    }
+}
+
+impl TemplateCatalog for FsTemplateStore {
+    fn list(&self) -> Result<Vec<TemplateListing>> {
+        let mut listings = Vec::new();
+
+        for base in self.store_bases() {
+            let Ok(entries) = std::fs::read_dir(&base) else {
+                continue;
+            };
+
+            let mut candidates: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir() && path.join("scaffold.toml").is_file())
+                .collect();
+            candidates.sort();
+
+            for path in candidates {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_default();
+                listings.push(TemplateListing {
+                    name,
+                    path,
+                    base: base.clone(),
+                });
+            }
+        }
+
+        Ok(listings)
     }
 }
 
@@ -368,5 +402,95 @@ mod tests {
         let store = FsTemplateStore::new(None);
 
         assert!(store.resolve(".").is_err());
+    }
+
+    #[test]
+    fn list_enumerates_templates_across_bases_in_priority_order() {
+        let template_dir = tempdir().expect("tempdir");
+        let scaffolder_home = tempdir().expect("tempdir");
+        let fake_home = tempdir().expect("tempdir");
+
+        let from_template_dir = template_dir.path().join("alpha");
+        std::fs::create_dir_all(&from_template_dir).expect("create template dir");
+        std::fs::write(from_template_dir.join("scaffold.toml"), "").expect("write manifest");
+
+        let from_scaffolder_home = scaffolder_home.path().join("beta");
+        std::fs::create_dir_all(&from_scaffolder_home).expect("create template dir");
+        std::fs::write(from_scaffolder_home.join("scaffold.toml"), "").expect("write manifest");
+
+        let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
+
+        let listings = with_env_vars(
+            &[
+                (
+                    "SCAFFOLDER_HOME",
+                    Some(scaffolder_home.path().to_str().expect("utf8 path")),
+                ),
+                ("XDG_CONFIG_HOME", None),
+                ("HOME", Some(fake_home.path().to_str().expect("utf8 path"))),
+            ],
+            || store.list(),
+        )
+        .expect("list should succeed");
+
+        assert_eq!(listings.len(), 2);
+        assert_eq!(listings[0].name, "alpha");
+        assert_eq!(listings[0].path, from_template_dir);
+        assert_eq!(listings[0].base, template_dir.path());
+        assert_eq!(listings[1].name, "beta");
+        assert_eq!(listings[1].path, from_scaffolder_home);
+        assert_eq!(listings[1].base, scaffolder_home.path());
+    }
+
+    #[test]
+    fn list_excludes_directories_without_scaffold_toml() {
+        let template_dir = tempdir().expect("tempdir");
+        let fake_home = tempdir().expect("tempdir");
+
+        let valid = template_dir.path().join("valid");
+        std::fs::create_dir_all(&valid).expect("create template dir");
+        std::fs::write(valid.join("scaffold.toml"), "").expect("write manifest");
+
+        let not_a_template = template_dir.path().join("not-a-template");
+        std::fs::create_dir_all(&not_a_template).expect("create plain dir");
+
+        let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
+
+        let listings = with_env_vars(
+            &[
+                ("SCAFFOLDER_HOME", None),
+                ("XDG_CONFIG_HOME", None),
+                ("HOME", Some(fake_home.path().to_str().expect("utf8 path"))),
+            ],
+            || store.list(),
+        )
+        .expect("list should succeed");
+
+        assert_eq!(listings.len(), 1);
+        assert_eq!(listings[0].name, "valid");
+    }
+
+    #[test]
+    fn list_skips_nonexistent_base_without_error() {
+        let template_dir = tempdir().expect("tempdir");
+        let missing_scaffolder_home = template_dir.path().join("does-not-exist");
+        let fake_home = tempdir().expect("tempdir");
+
+        let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
+
+        let listings = with_env_vars(
+            &[
+                (
+                    "SCAFFOLDER_HOME",
+                    Some(missing_scaffolder_home.to_str().expect("utf8 path")),
+                ),
+                ("XDG_CONFIG_HOME", None),
+                ("HOME", Some(fake_home.path().to_str().expect("utf8 path"))),
+            ],
+            || store.list(),
+        )
+        .expect("missing base should be skipped, not an error");
+
+        assert!(listings.is_empty());
     }
 }
