@@ -1,4 +1,4 @@
-//! 바이너리 진입점.
+//! Binary entry point.
 
 fn main() -> std::process::ExitCode {
     if let Err(err) = scaffolder::cli::command::run() {

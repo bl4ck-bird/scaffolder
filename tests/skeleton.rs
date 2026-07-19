@@ -1,6 +1,7 @@
-//! `domain::skeleton::skeleton` 샘플이 실제 파이프라인(manifest 파싱·partials·data·render)을
-//! 통과하는 유효 템플릿인지 교차검증한다. `domain::skeleton`의 프로덕션/유닛 테스트는 순수
-//! domain만 참조해야 하므로(레이어드 아키텍처), infra를 걸치는 검증은 통합 테스트로 분리한다.
+//! Cross-checks that the `domain::skeleton::skeleton` samples are valid templates by running
+//! them through the real pipeline (manifest parsing, partials, data, render). `domain::skeleton`'s
+//! own unit tests must reference only the pure domain (layered architecture), so the checks that
+//! cross into infra live here as an integration test.
 
 use std::collections::BTreeMap;
 use std::fs;

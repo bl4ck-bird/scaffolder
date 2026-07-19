@@ -1,12 +1,12 @@
-//! `scaffolder template list`/`new`/`validate` e2e: 정렬 출력, 빈 스토어 안내, 중복 name base 힌트,
-//! 신규 템플릿 뼈대 생성, 정적 검사 리포트+종료코드.
+//! End-to-end `scaffolder template list`/`new`/`validate`: sorted output, empty-store guidance,
+//! duplicate-name base hints, new template skeleton creation, and the static-check report + exit code.
 
 use std::fs;
 
 use assert_cmd::Command;
 use predicates::str::contains;
 
-/// `store_dir/name`에 조회 가능한 스토어 템플릿을 만든다.
+/// Creates a resolvable store template at `store_dir/name`.
 fn write_store_template(store_dir: &std::path::Path, name: &str) {
     let template_dir = store_dir.join(name);
     fs::create_dir_all(&template_dir).expect("mkdir store template dir");
@@ -18,7 +18,7 @@ fn template_list_prints_names_sorted() {
     let store_dir = tempfile::tempdir().expect("store tempdir");
     write_store_template(store_dir.path(), "zeta");
     write_store_template(store_dir.path(), "alpha");
-    // 실제 개발자 `~/.scaffolder`가 열거에 새지 않도록 가짜 HOME으로 격리한다.
+    // Isolate with a fake HOME so a real developer `~/.scaffolder` does not leak into the listing.
     let fake_home = tempfile::tempdir().expect("fake home tempdir");
 
     let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
@@ -126,7 +126,7 @@ fn template_new_full_creates_full_skeleton_and_is_a_valid_apply_source() {
     assert!(created.join("hooks/before").is_dir());
     assert!(created.join("hooks/after").is_dir());
 
-    // 생성물이 실제로 유효한 템플릿인지 apply 파이프라인(dry-run)에 태워 검증한다.
+    // Verify the output is actually a valid template by running it through apply (dry-run).
     let target_dir = tempfile::tempdir().expect("target tempdir");
     let mut apply_cmd = Command::cargo_bin("scaffolder").expect("binary");
     apply_cmd
@@ -275,7 +275,7 @@ fn template_validate_reports_invalid_type_finding() {
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
     assert!(stdout.contains("demo:"), "stdout: {stdout}");
     assert!(stdout.contains("[manifest]"), "stdout: {stdout}");
-    // 근본 원인이 노출돼야 한다 — top-level context만으로 묻히면 안 된다.
+    // The root cause must surface — it must not be buried behind only the top-level context.
     assert!(stdout.contains("unknown type"), "stdout: {stdout}");
     assert!(stdout.contains("\"bogus\""), "stdout: {stdout}");
     assert!(
@@ -306,7 +306,7 @@ fn template_validate_reports_jinja_syntax_error() {
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
     assert!(stdout.contains("demo:"), "stdout: {stdout}");
     assert!(stdout.contains("[template-syntax]"), "stdout: {stdout}");
-    // minijinja의 구체 진단이 보여야 한다(정확한 line/col 문구에는 결합하지 않는다).
+    // minijinja's concrete diagnostic must show (without coupling to exact line/col wording).
     assert!(stdout.contains("syntax error"), "stdout: {stdout}");
 }
 

@@ -1,4 +1,4 @@
-//! `scaffolder apply` e2e: 렌더/verbatim 배치, overwrite confirm, dry-run.
+//! End-to-end `scaffolder apply`: rendered/verbatim placement, overwrite confirm, dry-run.
 
 use std::fs;
 
@@ -23,15 +23,15 @@ fn write_template(dir: &std::path::Path) {
     fs::write(files.join("src/main.rs"), "fn main(){}").expect("write src/main.rs");
 }
 
-/// `store_dir/name`에 조회 가능한 스토어 템플릿을 만든다.
+/// Creates a resolvable store template at `store_dir/name`.
 fn write_store_template(store_dir: &std::path::Path, name: &str) {
     let template_dir = store_dir.join(name);
     fs::create_dir_all(&template_dir).expect("mkdir store template dir");
     write_template(&template_dir);
 }
 
-/// 질문 없이 `files/marker.txt`(내용=`marker`)만 배치하는 최소 템플릿 — 두 후보 템플릿 중
-/// 어느 쪽이 실제로 적용됐는지 배치된 파일 내용으로 구분하기 위함.
+/// Minimal template with no questions that places only `files/marker.txt` (content = `marker`) —
+/// used to tell which of two candidate templates was actually applied by the placed file's content.
 fn write_marker_template(dir: &std::path::Path, marker: &str) {
     fs::write(dir.join("scaffold.toml"), "").expect("write scaffold.toml");
     let files = dir.join("files");
@@ -98,8 +98,8 @@ fn apply_template_dir_missing_store_name_fails_with_searched_locations() {
     );
 }
 
-/// 회귀: bare 스토어 이름이 CWD의 동명 디렉토리에 가려지면 `--template-dir`가 조용히
-/// 우회된다 — store 체인이 CWD 셰도잉보다 우선해야 한다.
+/// Regression: a bare store name shadowed by a same-named CWD directory would silently bypass
+/// `--template-dir` — the store chain must win over CWD shadowing.
 #[test]
 fn apply_bare_store_name_wins_over_cwd_shadow_directory() {
     let store_dir = tempfile::tempdir().expect("store tempdir");
@@ -133,7 +133,7 @@ fn apply_bare_store_name_wins_over_cwd_shadow_directory() {
     );
 }
 
-/// bare 이름이 어느 store에도 없으면 CWD 기준 동명 디렉토리로 fallback한다(기존 호환).
+/// When a bare name is in no store, it falls back to a same-named CWD directory (back-compat).
 #[test]
 fn apply_bare_name_falls_back_to_cwd_directory_when_absent_from_stores() {
     let store_dir = tempfile::tempdir().expect("store tempdir");
@@ -257,8 +257,8 @@ fn apply_dry_run_does_not_write_and_prints_plan() {
     );
 }
 
-/// `project`(default 있음)/`port`(int, default 없음)/`verbose`(bool, default 있음) 질문과
-/// 타입 보존을 확인하는 렌더 템플릿.
+/// Render template with `project` (has default) / `port` (int, no default) / `verbose` (bool,
+/// has default) questions — exercises type preservation.
 fn write_multi_type_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -371,8 +371,8 @@ fn apply_answers_flag_overrides_answers_file() {
 
     cmd.assert().success();
 
-    // project는 --answers(override); port는 --answers-file(5000 >= 3000 → high);
-    // verbose는 어느 쪽에도 없으니 default(false → q)로 떨어진다.
+    // project from --answers (override); port from --answers-file (5000 >= 3000 → high);
+    // verbose is in neither, so it falls to its default (false → q).
     let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "cliproj:high:q");
 }
@@ -474,8 +474,8 @@ fn apply_noninteractive_without_required_answer_fails() {
     cmd.assert().failure();
 }
 
-/// `stacks`(multiselect) + `private`(boolean, default=false, `when = "'ci' in stacks"`) 질문과
-/// 그 값을 렌더하는 템플릿.
+/// Template with `stacks` (multiselect) + `private` (boolean, default=false,
+/// `when = "'ci' in stacks"`) questions, rendering that value.
 fn write_when_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -542,14 +542,15 @@ fn apply_when_inactive_uses_default_and_ignores_given_answer() {
 
     cmd.assert().success();
 
-    // stacks에 'ci'가 없으므로 private은 inactive: 준 답변(true)을 무시하고 default(false)를 쓴다.
+    // 'ci' not in stacks, so private is inactive: the given answer (true) is ignored and the
+    // default (false) is used.
     let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "private=false");
 }
 
-/// `stacks`(multiselect) + `extra`(string, default 없음, `when = "'ci' in stacks"`) 질문.
-/// 템플릿은 동일 조건으로 `extra` 접근을 가드해, inactive일 때(컨텍스트 부재) 렌더가 절대
-/// `extra`를 참조하지 않게 한다.
+/// `stacks` (multiselect) + `extra` (string, no default, `when = "'ci' in stacks"`) questions.
+/// The template guards `extra` access with the same condition so that when inactive (absent from
+/// context) the render never references `extra`.
 fn write_when_no_default_template(dir: &std::path::Path, guarded: bool) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -613,7 +614,7 @@ fn apply_when_inactive_without_default_errors_if_template_references_it_uncondit
         .arg("--answers")
         .arg("stacks=docker");
 
-    // extra는 inactive이고 default가 없어 컨텍스트에서 부재한다; strict undefined로 렌더가 실패한다.
+    // extra is inactive and has no default, so it is absent from context; strict undefined fails the render.
     cmd.assert().failure();
 }
 
@@ -672,7 +673,7 @@ fn apply_jinja_scaffoldignore_excludes_output_path_based_on_answers() {
         fs::write(files.join("Dockerfile"), "FROM scratch").expect("write Dockerfile");
     }
 
-    // stacks에 docker 미포함: Dockerfile 제외.
+    // stacks lacks docker: Dockerfile excluded.
     let template = tempfile::tempdir().expect("template tempdir");
     write_docker_template(template.path());
     let workdir = tempfile::tempdir().expect("workdir tempdir");
@@ -689,7 +690,7 @@ fn apply_jinja_scaffoldignore_excludes_output_path_based_on_answers() {
         "Dockerfile must be excluded when stacks lacks docker"
     );
 
-    // stacks에 docker 포함: Dockerfile 배치.
+    // stacks includes docker: Dockerfile placed.
     let template2 = tempfile::tempdir().expect("template tempdir");
     write_docker_template(template2.path());
     let target2 = workdir.path().join("demo-docker");
@@ -715,7 +716,7 @@ fn apply_scaffoldignore_matches_rendered_output_name_not_source_name() {
     fs::write(template.path().join(".scaffoldignore"), "*.tmp\n").expect("write .scaffoldignore");
     let files = template.path().join("files");
     fs::create_dir_all(&files).expect("mkdir files");
-    // 소스명은 .tmp.jinja로 끝나 *.tmp에 매치되지 않지만, 렌더된 출력명 config.tmp는 매치된다.
+    // Source name ends in .tmp.jinja so it does not match *.tmp, but the rendered output name config.tmp does.
     fs::write(files.join("config.tmp.jinja"), "rendered").expect("write config.tmp.jinja");
     fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
 
@@ -817,7 +818,7 @@ fn apply_include_of_unregistered_partial_fails() {
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let files = template.path().join("files");
     fs::create_dir_all(&files).expect("mkdir files");
-    // `partials/` 밖(또는 미등록) 이름 include는 등록 템플릿 조회에 실패해 렌더 에러.
+    // Including a name outside `partials/` (or unregistered) fails the registered-template lookup — render error.
     fs::write(files.join("out.txt.jinja"), "{% include \"../escape\" %}")
         .expect("write out.txt.jinja");
 
@@ -882,8 +883,8 @@ fn apply_exposes_merged_data_in_render_context() {
 
 #[test]
 fn apply_dedup_lines_over_included_partial() {
-    // 대표 시나리오: partial을 `{% include %}`로 조립한 결과를 `{% filter dedup_lines %}`로
-    // 중복 제거.
+    // Representative scenario: assemble a partial via `{% include %}` and dedupe the result with
+    // `{% filter dedup_lines %}`.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let partials = template.path().join("partials");
@@ -918,9 +919,10 @@ fn apply_dedup_lines_over_included_partial() {
 
 #[test]
 fn apply_when_cannot_reference_data() {
-    // data는 answer 확정(step 2) 이후 병합(step 3)되므로 `when`은 data 네임스페이스 자체를
-    // 보지 못한다. 멤버 접근(`data.flag`)뿐 아니라 네임스페이스 참조(`not data`)도 미정의로 실패해야
-    // 한다(빈 테이블로 노출하면 `not data`가 성공해 우회 가능 — 그 우회를 잠근다).
+    // data is merged (step 3) only after answers are finalized (step 2), so `when` cannot see the
+    // data namespace at all. Not just member access (`data.flag`) but a bare namespace reference
+    // (`not data`) must fail as undefined (exposing an empty table would let `not data` succeed and
+    // bypass — this locks that bypass out).
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(
         template.path().join("scaffold.toml"),
@@ -955,8 +957,8 @@ fn apply_when_cannot_reference_data() {
 
 #[test]
 fn apply_broken_partial_fails_without_creating_target() {
-    // partial 등록(구문 컴파일)은 target 생성 전에 수행하므로, 잘못된 partial은 빈 target을
-    // 남기지 않고 실패해야 한다.
+    // Partial registration (syntax compilation) runs before target creation, so a broken partial
+    // must fail without leaving an empty target.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let partials = template.path().join("partials");
@@ -1014,9 +1016,10 @@ fn apply_applies_mode_prefix_permissions() {
             & 0o777
     };
 
-    // umask에 무관한 "비트가 제거됨" 불변식만 검사한다(umask는 비트를 추가로 제거만 하므로 "set"
-    // 단언은 환경 의존적). 이 clear 불변식들은 mode 적용의 양성 증거다 — base(0o644)라면 남았을
-    // 비트가 제거됐음을 보인다. 정확한 비트값은 domain from_modes 테스트가 잠근다.
+    // Check only the umask-independent "bits are cleared" invariants (umask only removes further
+    // bits, so a "set" assertion would be environment-dependent). These clear invariants are
+    // positive evidence of mode application — they show bits that base (0o644) would have left set
+    // were removed. Exact bit values are locked by the domain from_modes test.
     assert_eq!(
         mode("secret.txt") & 0o077,
         0,
@@ -1036,8 +1039,8 @@ fn apply_applies_mode_prefix_permissions() {
 
 #[test]
 fn apply_render_failure_leaves_no_target() {
-    // strict undefined 렌더 에러는 plan 단계에서 실패한다. target은 plan 이후 생성되므로 빈 target이
-    // 남지 않아야 한다.
+    // A strict-undefined render error fails in the plan phase. The target is created after plan, so
+    // no empty target must be left behind.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let files = template.path().join("files");
@@ -1062,8 +1065,8 @@ fn apply_render_failure_leaves_no_target() {
 
 #[test]
 fn apply_uses_scaffoldroot_effective_source_root() {
-    // repo top에 `.scaffoldroot`만 두고 실제 템플릿은 하위 `template/`에 둔다. 실효 루트가 하위로
-    // 이동해 거기의 scaffold.toml·files/를 읽어야 한다.
+    // Place only `.scaffoldroot` at the repo top and the real template under `template/`. The
+    // effective root must move down and read scaffold.toml and files/ from there.
     let repo = tempfile::tempdir().expect("repo tempdir");
     fs::write(repo.path().join(".scaffoldroot"), "template\n").expect("write .scaffoldroot");
     fs::write(repo.path().join("README.md"), "repo readme, not template")
@@ -1091,7 +1094,7 @@ fn apply_uses_scaffoldroot_effective_source_root() {
 
     let out = fs::read_to_string(target.join("out.txt")).expect("read out.txt");
     assert_eq!(out, "hi");
-    // repo top의 README는 템플릿 payload가 아니므로 배치되지 않는다.
+    // The repo-top README is not template payload, so it is not placed.
     assert!(!target.join("README.md").exists());
 }
 
@@ -1100,9 +1103,9 @@ fn apply_uses_scaffoldroot_effective_source_root() {
 fn apply_force_replaces_existing_external_symlink_dest_in_place() {
     use std::os::unix::fs::symlink;
 
-    // target에 외부 파일을 가리키는 기존 심링크가 있고 템플릿이 같은 이름을 쓴다. 이는
-    // 외부쓰기가 아니라 overwrite(제자리 교체)여야 한다 — `--force`로 링크가 일반 파일로 교체되고
-    // 외부 대상은 불변이어야 한다.
+    // The target has an existing symlink pointing at an external file, and the template uses the
+    // same name. This must be an overwrite (in-place replacement), not an external write — `--force`
+    // replaces the link with a regular file and the external target must stay unchanged.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let files = template.path().join("files");
@@ -1142,7 +1145,7 @@ fn apply_force_replaces_existing_external_symlink_dest_in_place() {
     );
 }
 
-/// `project` 질문 + 인라인 before 훅(`$SCAFFOLDER_PROJECT`를 `hook-out.txt`에 씀)이 있는 템플릿.
+/// Template with a `project` question + inline before hook (writes `$SCAFFOLDER_PROJECT` to `hook-out.txt`).
 fn write_hook_env_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -1280,7 +1283,7 @@ fn apply_hook_confirm_required_without_yes_fails_noninteractively_with_no_side_e
         .arg("--answers")
         .arg("project=demo");
 
-    // assert_cmd 실행은 기본적으로 비-tty다; --yes 없이 훅이 있으면 confirm이 거절되어 에러여야 한다.
+    // assert_cmd runs non-tty by default; with a hook and no --yes the confirm is refused and it must error.
     cmd.assert().failure();
 
     assert!(
@@ -1289,8 +1292,8 @@ fn apply_hook_confirm_required_without_yes_fails_noninteractively_with_no_side_e
     );
 }
 
-/// `project` 질문 + `.jinja` 폴더훅(`hooks/before/10-gen.sh.jinja`, `{{ project }}`를
-/// `rendered-hook-out.txt`에 씀)이 있는 템플릿.
+/// Template with a `project` question + a `.jinja` folder hook (`hooks/before/10-gen.sh.jinja`,
+/// writes `{{ project }}` to `rendered-hook-out.txt`).
 fn write_jinja_folder_hook_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -1313,8 +1316,9 @@ fn write_jinja_folder_hook_template(dir: &std::path::Path) {
     fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
 }
 
-/// E2E 회귀: `.jinja` 폴더훅은 실제 MiniJinja 렌더 → temp 파일 → exec 체인을 answer 컨텍스트로
-/// 거쳐야 한다(piecewise 단위테스트만으로는 렌더 컨텍스트가 실제로 전달되는지 증명되지 않는다).
+/// E2E regression: a `.jinja` folder hook must go through the real MiniJinja render → temp file →
+/// exec chain with the answer context (piecewise unit tests alone don't prove the render context is
+/// actually threaded through).
 #[test]
 fn apply_jinja_folder_hook_renders_with_answer_context_and_executes() {
     let template = tempfile::tempdir().expect("template tempdir");
@@ -1342,7 +1346,7 @@ fn apply_jinja_folder_hook_renders_with_answer_context_and_executes() {
     );
 }
 
-/// payload 파일(`files/marker.txt` = "payload") + after 훅(`cat marker.txt`)이 있는 템플릿.
+/// Template with a payload file (`files/marker.txt` = "payload") + after hook (`cat marker.txt`).
 fn write_after_hook_observes_payload_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -1357,8 +1361,8 @@ fn write_after_hook_observes_payload_template(dir: &std::path::Path) {
     fs::write(files.join("marker.txt"), "payload").expect("write marker.txt");
 }
 
-/// E2E 회귀: after 훅은 write 이후에 실행되므로 payload로 배치된 파일을 실제로 읽을 수 있어야
-/// 한다(지금까지는 순서가 구조적으로만 증명되었다).
+/// E2E regression: the after hook runs after write, so it must be able to actually read the placed
+/// payload file (until now the ordering was only proven structurally).
 #[test]
 fn apply_after_hook_observes_written_payload_file() {
     let template = tempfile::tempdir().expect("template tempdir");
@@ -1399,7 +1403,7 @@ fn apply_dry_run_skips_hook_confirm_and_execution() {
         .arg("project=demo")
         .arg("--dry-run");
 
-    // --yes 없이도 dry-run은 confirm·훅 실행 자체를 생략하므로 성공해야 한다.
+    // Even without --yes, dry-run skips the confirm and hook execution entirely, so it must succeed.
     cmd.assert().success();
 
     assert!(
@@ -1408,8 +1412,9 @@ fn apply_dry_run_skips_hook_confirm_and_execution() {
     );
 }
 
-/// 외부(실효 소스 루트 밖) 심링크 제어파일은 `--trust` 없이는 거부되어야 한다
-/// (부작용 전 abort); `--trust`로 opt-in하면 정상 로드된다. 내부 심링크는 항상 허용된다.
+/// A control file symlinked externally (outside the effective source root) must be refused without
+/// `--trust` (abort before side effects); opting in with `--trust` loads it normally. Internal
+/// symlinks are always allowed.
 #[cfg(unix)]
 #[test]
 fn apply_rejects_externally_symlinked_manifest_without_trust() {
@@ -1545,8 +1550,9 @@ fn apply_rejects_externally_symlinked_hook_script_without_trust() {
     );
 }
 
-/// `.scaffoldroot` 자체가 소스 루트 밖 파일로의 심링크면, 그 내용(실효 소스 루트 선택)을
-/// `--trust` 없이 읽어서는 안 된다 — 외부 제어파일 default-refuse 계약이 `.scaffoldroot`에도 적용된다.
+/// If `.scaffoldroot` is itself a symlink to a file outside the source root, its contents (which
+/// select the effective source root) must not be read without `--trust` — the external control-file
+/// default-refuse contract applies to `.scaffoldroot` too.
 #[cfg(unix)]
 #[test]
 fn apply_rejects_externally_symlinked_scaffoldroot_without_trust() {
@@ -1653,9 +1659,9 @@ fn apply_fails_on_broken_symlinked_hook_script() {
     );
 }
 
-// --- 실패 시 target 정리 e2e ---
+// --- target cleanup-on-failure e2e ---
 
-/// before 훅이 `exit 1`로 실패하는 템플릿 — 실패 시 target 정리 재현용.
+/// Template whose before hook fails via `exit 1` — reproduces target cleanup on failure.
 fn write_failing_before_hook_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -1697,7 +1703,7 @@ fn apply_failure_preserves_preexisting_target_and_sentinel() {
     write_failing_before_hook_template(template.path());
     let workdir = tempfile::tempdir().expect("workdir tempdir");
     let target = workdir.path().join("demo");
-    // nested sentinel — 삭제 후 재생성 같은 결함까지 잡도록 하위 디렉토리 안에 심는다.
+    // nested sentinel — planted inside a subdirectory to also catch a delete-then-recreate defect.
     fs::create_dir_all(target.join("nested")).expect("precreate nested");
     fs::write(target.join("nested").join("deep.txt"), "user-data").expect("nested sentinel");
 
@@ -1766,8 +1772,9 @@ fn apply_failure_cleanup_does_not_touch_sibling() {
 
 #[test]
 fn apply_with_dotdot_in_target_applies_at_normalized_effective_path() {
-    // `..`를 포함한 target도 실효 경로에 정상 적용된다 — target_root를 apply 경계에서 한 번
-    // 정규화하므로 훅 cwd·write·ensure·cleanup이 모두 같은 경로(base/demo)를 쓴다.
+    // A target containing `..` still applies correctly at the effective path — target_root is
+    // normalized once at the apply boundary, so hook cwd, write, ensure, and cleanup all use the
+    // same path (base/demo).
     let template = tempfile::tempdir().expect("template tempdir");
     write_template(template.path());
     let workdir = tempfile::tempdir().expect("workdir tempdir");
@@ -1793,7 +1800,7 @@ fn apply_with_dotdot_in_target_applies_at_normalized_effective_path() {
     );
 }
 
-/// after 훅이 `exit 1`로 실패하는 템플릿 — write 성공 후 정리(산출물 포함) 재현용.
+/// Template whose after hook fails via `exit 1` — reproduces cleanup (including outputs) after a successful write.
 fn write_failing_after_hook_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -1810,7 +1817,7 @@ fn write_failing_after_hook_template(dir: &std::path::Path) {
 
 #[test]
 fn apply_after_hook_failure_cleans_up_created_target_with_contents() {
-    // write가 완료돼 marker.txt가 배치된 뒤 after-hook이 실패해도 신규 target이 통째 정리된다.
+    // Even if the after-hook fails after write completes and marker.txt is placed, the newly created target is cleaned up wholesale.
     let template = tempfile::tempdir().expect("template tempdir");
     write_failing_after_hook_template(template.path());
     let workdir = tempfile::tempdir().expect("workdir tempdir");

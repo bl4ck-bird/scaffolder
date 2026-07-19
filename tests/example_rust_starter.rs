@@ -1,5 +1,5 @@
-//! `examples/rust-starter` 예시 템플릿의 apply 재현 e2e: 조건부 스킵·gitignore
-//! dedup·mode prefix(+x)·verbatim(${{ }} 보존)을 실제 `apply`로 검증한다.
+//! End-to-end apply of the `examples/rust-starter` template: exercises conditional skipping,
+//! gitignore dedup, mode prefixes (+x), and verbatim passthrough (`${{ }}` preserved) via real `apply`.
 
 use std::fs;
 use std::path::PathBuf;
