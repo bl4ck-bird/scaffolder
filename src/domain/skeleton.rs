@@ -1,8 +1,8 @@
-//! `template new`가 생성할 뼈대 파일 집합의 순수 정의 — `SkeletonEntry`, `skeleton`.
+//! Pure definition of the skeleton files `template new` creates — `SkeletonEntry`, `skeleton`.
 
-/// `template new`가 스토어에 쓸 항목 하나. `content: None`이면 디렉토리, `Some`이면 그 내용의
-/// 파일. `rel`은 템플릿 루트 기준 상대경로(`/` 구분, 단일 컴포넌트 경계 안 — `safe_rel_path`로
-/// 검증 가능).
+/// One entry `template new` writes to the store. `content: None` is a directory, `Some` is a
+/// file with that content. `rel` is relative to the template root (`/`-separated, within the
+/// single-component boundary checked by `safe_rel_path`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkeletonEntry {
     pub rel: String,
@@ -49,10 +49,10 @@ const SAMPLE_DATA_TOML: &str = "[project]\ntagline = \"built with scaffolder\"\n
 
 const NOTES_JINJA: &str = "{% include \"header.txt\" %}\n\n{{ data.project.tagline }}\n";
 
-/// `full=false`면 최소 유효 템플릿(scaffold.toml+files/+샘플 파일), `full=true`면 추가로
-/// partials/·data/·hooks/ 샘플을 포함한다. 샘플 자체가 유효 템플릿이 되도록 유지한다 — 파싱
-/// 가능한 manifest, 문법에 맞는 파일명, 컴파일 가능한 jinja, 존재하는 partial 참조, 충돌 없음
-/// (아래 테스트가 교차검증).
+/// `full=false` yields a minimal valid template (`scaffold.toml` + `files/` + a sample);
+/// `full=true` adds `partials/`, `data/`, and `hooks/` samples. The samples must themselves
+/// form a valid template — parseable manifest, grammatical file names, compilable jinja,
+/// resolvable partial references, no conflicts (cross-checked by the tests below).
 pub fn skeleton(full: bool) -> Vec<SkeletonEntry> {
     let manifest = if full { FULL_MANIFEST } else { SIMPLE_MANIFEST };
 

@@ -1,6 +1,7 @@
-//! 정적 검사(template validate): 스키마·질문·when·파일명 문법·partial 참조·`.jinja` 구문.
-//! fail-fast가 아니다 — 매니페스트 로드 실패도 finding 하나로 담고, 독립적인 payload 기반
-//! 검사(파일명·구문·소스 충돌·partial 참조)는 계속 시도한다. 도메인 포트만 사용한다.
+//! Static checks (`template validate`): schema, questions, `when`, file-name grammar, partial
+//! references, and `.jinja` syntax. Not fail-fast — a manifest load failure is captured as one
+//! finding, and independent payload-based checks (file name, syntax, source conflict, partial
+//! references) still run. Uses only domain ports.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,7 +41,7 @@ impl ValidationReport {
     }
 }
 
-/// `validate_template`이 쓰는 포트 묶음(인자 개수 축소용 parameter object).
+/// The ports `validate_template` uses (a parameter object).
 pub struct ValidatePorts<'a> {
     pub manifest_src: &'a dyn ManifestSource,
     pub partial_source: &'a dyn PartialSource,
@@ -48,8 +49,8 @@ pub struct ValidatePorts<'a> {
     pub syntax: &'a dyn SyntaxChecker,
 }
 
-/// 템플릿 정적 검사를 수행해 모든 finding을 모아 반환한다. `Err`는 검사 자체를 수행하지 못한
-/// 경우(IO 실패 등)에만 쓰고, 템플릿 결함은 전부 `ValidationReport.findings`에 담는다.
+/// Runs the static template checks and returns every finding. `Err` is only for being unable
+/// to run a check at all (e.g. an IO failure); template defects all go into `ValidationReport.findings`.
 pub fn validate_template(template_root: &Path, ports: ValidatePorts) -> Result<ValidationReport> {
     let mut findings = Vec::new();
 
@@ -57,8 +58,7 @@ pub fn validate_template(template_root: &Path, ports: ValidatePorts) -> Result<V
     let manifest = match ports.manifest_src.load(&manifest_path) {
         Ok(manifest) => Some(manifest),
         Err(err) => {
-            // `err`의 anyhow chain(`{err:#}`)이 이미 매니페스트 경로를 담고 있으므로 경로를
-            // 다시 접두하면 중복된다.
+            // The anyhow chain (`{err:#}`) already includes the manifest path, so prefixing it again would duplicate it.
             findings.push(Finding {
                 kind: FindingKind::Manifest,
                 message: format!("{err:#}"),
@@ -216,9 +216,10 @@ fn check_template_source(
     }
 }
 
-/// `{% include "name" %}`/`{% include 'name' %}`(공백·`{%-`/`-%}` 변형 허용) 형태의 리터럴
-/// include만 추출한다. 동적 include(변수·리스트·표현식)는 include 뒤 첫 토큰이 quote가 아니므로
-/// 자연히 건너뛴다(false positive 회피 — 확신 없으면 skip).
+/// Extracts only literal includes of the form `{% include "name" %}` / `{% include 'name' %}`
+/// (whitespace and `{%-`/`-%}` variants allowed). A dynamic include (variable, list, expression)
+/// is naturally skipped since the first token after `include` is not a quote (avoiding false
+/// positives — skip when unsure).
 fn literal_includes(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut cursor = 0usize;
@@ -346,8 +347,8 @@ mod tests {
         }
     }
 
-    /// `check_template`/`check_expression`을 "BAD_TEMPLATE"/"BAD_EXPR" 마커 포함 여부로만
-    /// 판정하는 테스트용 `SyntaxChecker` — app 계층 테스트는 실제 minijinja 문법을 몰라야 한다.
+    /// Test `SyntaxChecker` that decides only by the presence of "BAD_TEMPLATE"/"BAD_EXPR"
+    /// markers in `check_template`/`check_expression` — app-layer tests must not know real minijinja syntax.
     struct FakeSyntaxChecker;
     impl SyntaxChecker for FakeSyntaxChecker {
         fn check_template(&self, source: &str) -> Result<()> {
@@ -434,7 +435,7 @@ mod tests {
 
     #[test]
     fn manifest_load_failure_does_not_block_independent_payload_checks() {
-        // 매니페스트가 없어도 파일명 문법 같은 payload 기반 검사는 계속 시도한다.
+        // Even without a manifest, payload-based checks like file-name grammar still run.
         let store = FakePayloadStore {
             entries: vec![entry("sub/.jinja")],
             contents: HashMap::new(),
@@ -694,8 +695,8 @@ mod tests {
 
     #[test]
     fn undefined_variable_reference_is_not_checked_by_syntax_checker() {
-        // FakeSyntaxChecker는 "BAD_TEMPLATE" 마커만 보므로, 이 테스트는 aggregator가 변수 미정의를
-        // 검사할 어떠한 로직도 갖고 있지 않음을(포트에만 위임함을) 보증한다.
+        // FakeSyntaxChecker only looks for the "BAD_TEMPLATE" marker, so this test guarantees the
+        // aggregator has no logic of its own for undefined variables (it delegates entirely to the port).
         let manifest = Manifest::default();
         let store = FakePayloadStore {
             entries: vec![entry("README.md.jinja")],

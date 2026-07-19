@@ -1,13 +1,12 @@
-//! 정적 데이터 병합 → `data.*`와 `DataSource` 포트.
+//! Static data merging exposed as `data.*`, and the `DataSource` port.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
 
-/// 렌더 컨텍스트의 `data.*`로 노출되는 정적 값 트리. 도메인 순수성을 위해 toml/minijinja 타입을
-/// 누수하지 않는 자체 표현이다. infra가 TOML을 이 타입으로 변환하고, 렌더러가 이 타입을 Jinja
-/// 값으로 변환한다.
+/// Static value tree exposed as `data.*`. An own representation so toml/minijinja types do
+/// not leak into the domain: infra converts TOML into it, the renderer converts it to Jinja.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataValue {
     Table(BTreeMap<String, DataValue>),
@@ -25,14 +24,13 @@ impl Default for DataValue {
 }
 
 impl DataValue {
-    /// 빈 테이블. 데이터 없는 컨텍스트의 기본값.
     pub fn empty_table() -> Self {
         DataValue::Table(BTreeMap::new())
     }
 }
 
-/// `base` 위에 `overlay`를 deep-merge한다. 양쪽이 Table이면 키 단위로 재귀 병합하고, 그 외에는
-/// overlay가 base를 대체한다(non-dict replace).
+/// Deep-merges `overlay` onto `base`: two tables merge key-by-key recursively, otherwise
+/// `overlay` replaces `base`.
 pub fn merge(base: DataValue, overlay: DataValue) -> DataValue {
     match (base, overlay) {
         (DataValue::Table(mut base), DataValue::Table(overlay)) => {
@@ -49,10 +47,10 @@ pub fn merge(base: DataValue, overlay: DataValue) -> DataValue {
     }
 }
 
-/// `data/*.toml`을 lexical 순서로 `base` 위에 deep-merge하는 포트. `base`는 매니페스트의
-/// `[data]`이며, 병합은 `[data]`▷f1▷f2… 단일 left-fold다 — deep-merge는 table→scalar→table에서
-/// 결합법칙이 성립하지 않으므로 파일끼리 먼저 합친 뒤 base에 합치면 안 된다. infra가
-/// TOML 파싱으로 구현한다.
+/// Port deep-merging `data/*.toml` onto `base` in lexical order. `base` is the manifest
+/// `[data]`; merging is a single left-fold `[data] ▷ f1 ▷ f2 …` — deep-merge is not
+/// associative across table→scalar→table, so files must not be merged together first.
+/// Implemented by infra via TOML parsing.
 pub trait DataSource {
     fn load(&self, template_root: &Path, base: DataValue) -> Result<DataValue>;
 }

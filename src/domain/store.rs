@@ -1,4 +1,4 @@
-//! 템플릿 스토어 조회·생성·열거 포트: `TemplateStore`, `TemplateInitializer`, `SourceRootSource`,
+//! Template store ports: `TemplateStore`, `TemplateInitializer`, `SourceRootSource`,
 //! `TemplateCatalog`.
 
 use std::path::{Path, PathBuf};
@@ -7,40 +7,40 @@ use anyhow::{Result, bail};
 
 use crate::domain::skeleton::SkeletonEntry;
 
-/// 스토어 이름 또는 로컬 경로를 템플릿 루트 경로로 해석하는 포트.
+/// Port resolving a store name or local path to a template root.
 pub trait TemplateStore {
     fn resolve(&self, name_or_path: &str) -> Result<PathBuf>;
 }
 
-/// 스토어에 신규 템플릿 뼈대를 생성하는 포트. 대상 이름이 이미 존재하면 부작용 없이 에러여야
-/// 한다(`template new`의 재실행 안전성).
+/// Port creating a new template skeleton in the store. An already-existing name must error
+/// with no side effects (re-run safety for `template new`).
 pub trait TemplateInitializer {
     fn create(&self, name: &str, entries: &[SkeletonEntry]) -> Result<PathBuf>;
 }
 
-/// `.scaffoldroot`를 해석해 실효 소스 루트를 얻는 포트.
+/// Port resolving `.scaffoldroot` to the effective source root.
 pub trait SourceRootSource {
     fn resolve(&self, template_root: &Path) -> Result<PathBuf>;
 }
 
-/// 스토어 base들에 걸쳐 템플릿 디렉토리를 열거하는 포트.
+/// Port enumerating template directories across the store bases.
 pub trait TemplateCatalog {
     fn list(&self) -> Result<Vec<TemplateListing>>;
 }
 
-/// 열거된 템플릿 하나 — 이름, 루트 경로, 소속 base.
+/// One enumerated template — name, root path, and owning base.
 ///
-/// 여러 base에 동명 템플릿이 있어도 열거는 전부 반환한다(base로 소속을 구분); 중복 판정과
-/// 우선순위 표시는 표시 계층 소관이다.
+/// Duplicate names across bases are all returned (disambiguated by base); dedup and
+/// priority display are the presentation layer's job.
 pub struct TemplateListing {
     pub name: String,
     pub path: PathBuf,
     pub base: PathBuf,
 }
 
-/// `name`이 스토어 내 단일 경로 컴포넌트인지 검증한다: 빈 문자열·경로 구분자·`.`/`..`는 거부.
-/// `FsTemplateStore::resolve`가 강제하는 규칙과 정합(그쪽은 이미 있는 스토어 항목 조회용, 이
-/// 함수는 `template new`의 신규 이름 검증용).
+/// Validates that `name` is a single path component: rejects empty, path separators, and
+/// `.`/`..`. Matches the rule `FsTemplateStore::resolve` enforces (that is for looking up an
+/// existing entry; this validates a new name for `template new`).
 pub fn validate_template_name(name: &str) -> Result<()> {
     if name.is_empty() || name == "." || name == ".." || name.contains('/') {
         bail!("template name {name:?} must be a single path component");

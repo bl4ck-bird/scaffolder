@@ -1,4 +1,4 @@
-//! `Manifest`(questions·[data]·hooks)와 `ManifestSource` 포트.
+//! The `Manifest` model and the `ManifestSource` port.
 
 use std::path::Path;
 
@@ -8,8 +8,8 @@ use crate::domain::data::DataValue;
 use crate::domain::hook::Hooks;
 use crate::domain::question::Question;
 
-/// `scaffold.toml` 파싱 결과. `data`는 `[data]` 섹션(파일 `data/*.toml`은 `DataSource`가 별도
-/// overlay).
+/// Parsed `scaffold.toml`. `data` is the `[data]` section; `data/*.toml` files are overlaid
+/// separately by `DataSource`.
 #[derive(Debug, Clone, Default)]
 pub struct Manifest {
     pub questions: Vec<Question>,
@@ -17,7 +17,7 @@ pub struct Manifest {
     pub hooks: Hooks,
 }
 
-/// 경로로부터 `Manifest`를 로드하는 포트. infra가 TOML 파싱으로 구현한다.
+/// Port loading a `Manifest` from a path; implemented by infra via TOML parsing.
 pub trait ManifestSource {
     fn load(&self, path: &Path) -> Result<Manifest>;
 }

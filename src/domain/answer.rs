@@ -1,5 +1,5 @@
-//! `AnswerValue`(Text/List/Int/Float/Bool), 불변 `AnswerContext`, `build_context`와
-//! `AnswerSource`·`ConditionEvaluator` 포트.
+//! Answer values, the immutable answer context, and the `AnswerSource` /
+//! `ConditionEvaluator` ports.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -9,7 +9,6 @@ use anyhow::{Result, anyhow, bail};
 use crate::domain::data::DataValue;
 use crate::domain::question::{Question, QuestionType};
 
-/// 확정된 answer 값. 타입 그대로 유지한다.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnswerValue {
     Text(String),
@@ -19,7 +18,7 @@ pub enum AnswerValue {
     Bool(bool),
 }
 
-/// `scaffolder.*` 렌더 빌트인.
+/// The `scaffolder.*` render builtins.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScaffolderBuiltins {
     pub name: String,
@@ -29,9 +28,9 @@ pub struct ScaffolderBuiltins {
     pub username: String,
 }
 
-/// 답변 확정 후 불변 컨텍스트. 공개 setter가 없다 — `build_context`로만 생성한다. `data`는
-/// `None`이면 아직 병합 전이라 렌더 컨텍스트에서 `data` 네임스페이스 자체가
-/// 부재한다 — `when` 평가(answer 확정 단계)에서 `data`를 참조하면 strict undefined로 에러난다.
+/// Immutable context built only by `build_context` (no public setters). When `data` is
+/// `None` the `data` namespace is absent from the render context, so referencing `data`
+/// in a `when` expression (evaluated before merge) fails as strict-undefined.
 #[derive(Debug, Clone)]
 pub struct AnswerContext {
     answers: BTreeMap<String, AnswerValue>,
@@ -48,8 +47,7 @@ impl AnswerContext {
         &self.builtins
     }
 
-    /// `data.*`로 노출되는 정적 데이터 트리(`[data]` + `data/*.toml` 병합 결과). 병합 전이면
-    /// `None` — 이때 `data` 네임스페이스는 컨텍스트에서 부재다.
+    /// The static data tree exposed as `data.*` (`[data]` + `data/*.toml`); `None` before merge.
     pub fn data(&self) -> Option<&DataValue> {
         self.data.as_ref()
     }
@@ -67,8 +65,8 @@ pub fn build_context(
     }
 }
 
-/// choice 값을 매칭에 쓸 정규 문자열로 만든다. `List`는 choice 값으로 쓰이지 않는 스펙이라
-/// 원소를 콤마로 join해 결정적 fallback만 제공한다.
+/// Canonical string for choice matching. `List` is never a choice value per spec, so its
+/// comma-join is only a deterministic fallback.
 pub(crate) fn canonical_string(value: &AnswerValue) -> String {
     match value {
         AnswerValue::Text(s) => s.clone(),
@@ -79,9 +77,9 @@ pub(crate) fn canonical_string(value: &AnswerValue) -> String {
     }
 }
 
-/// `--answers`의 raw 문자열을 choice 값의 타입으로 해석해 비교한다. `f64::to_string`이
-/// `2.0`을 `"2"`로 축약하는 등 `canonical_string`은 표시 형식만 정규화하므로, choice 매칭에는
-/// 타입별 파싱 비교가 필요하다.
+/// Compares a raw `--answers` string against a choice value by parsing it to the choice's
+/// type — `canonical_string` only normalizes display (e.g. `f64` `2.0` → `"2"`), so choice
+/// matching needs a typed comparison.
 fn raw_matches_choice(raw: &str, value: &AnswerValue) -> bool {
     match value {
         AnswerValue::Text(s) => raw == s,
@@ -96,7 +94,7 @@ fn raw_matches_choice(raw: &str, value: &AnswerValue) -> bool {
     }
 }
 
-/// `--answers`의 문자열 값을 질문 타입에 맞게 변환한다.
+/// Coerces a raw `--answers` string into the question's type.
 pub fn coerce(question: &Question, raw: &str) -> Result<AnswerValue> {
     let name = &question.name;
     match question.qtype {
@@ -160,8 +158,8 @@ pub fn coerce(question: &Question, raw: &str) -> Result<AnswerValue> {
     }
 }
 
-/// 이미 타입이 정해진 값(예: `--answers-file`)을 choices에 대해 검증한다.
-/// choices가 없는 타입(string/int/float/boolean)은 항상 Ok.
+/// Validates an already-typed value (e.g. from `--answers-file`) against the choices;
+/// a no-op for types without choices.
 pub fn validate_choice(question: &Question, value: &AnswerValue) -> Result<()> {
     let name = &question.name;
     match question.qtype {
@@ -197,12 +195,12 @@ pub fn validate_choice(question: &Question, value: &AnswerValue) -> Result<()> {
     }
 }
 
-/// 대화형 answer 프롬프트 포트. infra/cli가 구현한다.
+/// Port for interactive answer prompting; implemented by infra/cli.
 pub trait AnswerSource {
     fn ask(&self, question: &Question) -> Result<AnswerValue>;
 }
 
-/// `Question.when` 조건식 평가 포트. infra가 MiniJinja로 구현한다.
+/// Port evaluating a `Question.when` expression; implemented by infra via MiniJinja.
 pub trait ConditionEvaluator {
     fn is_active(&self, when: &str, ctx: &AnswerContext) -> Result<bool>;
 }

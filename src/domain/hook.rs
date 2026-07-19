@@ -1,59 +1,55 @@
-//! `Hook`, `HookPhase`(before/after)와 `HookSource`·`HookRunner`·`Confirmer` 포트
-//! (훅·overwrite·외부쓰기 confirm 겸용).
+//! Hook model and the `HookSource`, `HookRunner`, and `Confirmer` ports.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::domain::answer::AnswerValue;
 
-/// 훅 실행·overwrite·외부쓰기 confirm 게이트. infra가 대화형으로 구현한다.
+/// Confirmation gate for hooks, overwrites, and external writes; infra implements it interactively.
 pub trait Confirmer {
-    /// 훅 실행 전 confirm. `description`은 인라인 명령 또는 `run <file>` 표시.
+    /// Confirm before running a hook; `description` is the inline command or `run <file>`.
     fn confirm_hook(&self, description: &str) -> bool;
-    /// 기존 dest overwrite confirm(`--force`는 infra가 자동 승인으로 처리).
+    /// Confirm overwriting an existing destination (`--force` auto-approves in infra).
     fn confirm_overwrite(&self, path: &Path) -> bool;
-    /// target 밖 쓰기 confirm(payload 외부 심링크 포함).
+    /// Confirm a write outside the target (including payload external symlinks).
     fn confirm_external_write(&self, path: &Path) -> bool;
 }
 
-/// 훅 실행 시점: manifest `when` 조건 없이 before/after 단계에 매핑된다.
+/// Hook phase, mapped to the before/after stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookPhase {
     Before,
     After,
 }
 
-/// manifest에 선언된 단일 훅(인라인 `run` 명령, 선택적 `when` 조건).
+/// A single inline hook declared in the manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hook {
     pub when: Option<String>,
     pub run: String,
 }
 
-/// before/after 단계별 훅 목록.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Hooks {
     pub before: Vec<Hook>,
     pub after: Vec<Hook>,
 }
 
-/// `hooks/<phase>/` 폴더에서 발견된 스크립트. 실행 가능 파일은 그대로 실행하고,
-/// 템플릿 확장자가 붙은 파일은 렌더 후 실행한다.
+/// A script found under `hooks/<phase>/`: executables run as-is, templated files are rendered first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookScript {
     Executable { name: String, path: PathBuf },
     Template { name: String, raw: String },
 }
 
-/// `hooks/<phase>/` 폴더 스크립트를 lexical 순서로 열거하는 포트. infra가 파일시스템으로
-/// 구현한다.
+/// Port enumerating `hooks/<phase>/` scripts in lexical order; implemented by infra over the filesystem.
 pub trait HookSource {
     fn scripts(&self, template_root: &Path, phase: HookPhase) -> anyhow::Result<Vec<HookScript>>;
 }
 
-/// 훅 실행 포트. infra가 프로세스 실행으로 구현한다.
+/// Port for running hooks; implemented by infra via process execution.
 pub trait HookRunner {
-    /// manifest의 인라인 `run` 명령을 `/bin/sh -c`로 실행한다.
+    /// Run the manifest's inline `run` command via `/bin/sh -c`.
     fn run_inline(
         &self,
         command: &str,
@@ -61,7 +57,7 @@ pub trait HookRunner {
         env: &BTreeMap<String, String>,
     ) -> anyhow::Result<()>;
 
-    /// `hooks/<phase>/` 폴더의 실행 가능 스크립트를 원위치에서 실행한다.
+    /// Run a `hooks/<phase>/` executable script in place.
     fn run_script_file(
         &self,
         path: &Path,
@@ -69,7 +65,7 @@ pub trait HookRunner {
         env: &BTreeMap<String, String>,
     ) -> anyhow::Result<()>;
 
-    /// 렌더된 템플릿 훅 스크립트를 secure temp 파일로 써서 실행한다.
+    /// Run a rendered template hook script from a secure temp file.
     fn run_rendered(
         &self,
         name: &str,
@@ -79,10 +75,10 @@ pub trait HookRunner {
     ) -> anyhow::Result<()>;
 }
 
-/// answer 맵을 훅 실행용 env로 변환한다. 키는 `SCAFFOLDER_<UPPER(name)>`.
+/// Converts the answer map into hook env vars, keyed `SCAFFOLDER_<UPPER(name)>`.
 ///
-/// `List`(multiselect)는 공백으로 join한다 — `answer::canonical_string`(choice 매칭용, 콤마
-/// join)과는 목적이 다른 별도 포맷이라 재사용하지 않는다.
+/// `List` (multiselect) is space-joined — deliberately not `answer::canonical_string`
+/// (comma-joined for choice matching), a different format for a different purpose.
 pub fn hook_env(answers: &BTreeMap<String, AnswerValue>) -> BTreeMap<String, String> {
     answers
         .iter()

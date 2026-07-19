@@ -1,8 +1,9 @@
-//! 파일명 문법 파싱 `[<mode_>]<name>[.jinja]` (basename만, 디렉토리명 리터럴).
+//! File-name grammar parsing: `[<mode_>]<name>[.jinja]` (basename only; directory
+//! names are literal).
 
 use anyhow::{Result, bail};
 
-/// Unix 전용 모드 접두사. Stack 가능(`executable_private_`), 순서 무관.
+/// Unix-only mode prefix. Stackable (e.g. `executable_private_`) and order-independent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Executable,
@@ -23,7 +24,6 @@ const MODE_PREFIXES: [(&str, Mode); 3] = [
     ("readonly_", Mode::Readonly),
 ];
 
-/// `[<mode_>]<name>[.jinja]` basename 문법을 파싱한다. 디렉토리 컴포넌트는 다루지 않는다.
 pub fn parse_file_name(name: &str) -> Result<ParsedName> {
     let mut rest = name;
     let mut modes = Vec::new();

@@ -1,11 +1,11 @@
-//! `RelPath`, `safe_rel_path`, 소스 충돌 탐지, `FileMode`와 `PayloadStore` 포트
-//! (payload 읽기 + target 쓰기).
+//! `RelPath`/`safe_rel_path`, `FileMode`, and the `PayloadStore` port (payload reads +
+//! target writes).
 
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-/// 정규화된 상대 경로. 리터럴 `..`와 절대 경로를 배제한 뒤에만 생성 가능하다.
+/// A normalized relative path, constructible only after literal `..` and absolute paths are rejected.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RelPath(PathBuf);
 
@@ -21,7 +21,7 @@ impl std::fmt::Display for RelPath {
     }
 }
 
-/// 컴포넌트 단위로 정규화하고 리터럴 `..` 이탈·절대경로를 거부한다.
+/// Normalizes component-by-component and rejects literal `..` escapes and absolute paths.
 pub fn safe_rel_path(input: &str) -> Result<RelPath> {
     let mut normalized = PathBuf::new();
 
@@ -45,9 +45,9 @@ pub fn safe_rel_path(input: &str) -> Result<RelPath> {
     Ok(RelPath(normalized))
 }
 
-/// target 절대경로를 lexical 정규화한다(`.`/`..` 해소, symlink는 해소하지 않음). 실효 target
-/// 경로를 확정해, `..`를 포함한 입력이 (a) sibling에 예기치 않은 빈 디렉토리를 만들거나
-/// (b) 신규/기존 판정을 오도하는 것을 막는다. `..`는 루트 위로 올라가지 않는다.
+/// Lexically normalizes an absolute target path (resolving `.`/`..`, but not symlinks).
+/// Settling the effective path stops a `..` input from (a) creating an unexpected empty
+/// sibling directory or (b) misleading the new/existing decision. `..` never climbs above root.
 pub fn normalize_target(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -65,7 +65,7 @@ pub fn normalize_target(path: &Path) -> PathBuf {
 }
 
 /// Unix permission bits: `0o666` base → executable `|0o111` → private `&^0o77` →
-/// readonly `&^0o222`. 특수비트 없음.
+/// readonly `&^0o222`. No special bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMode(u32);
 
@@ -74,9 +74,9 @@ impl FileMode {
         FileMode(0o666)
     }
 
-    /// base(`0o666`)에 mode prefix를 적용한다. 파일명의 접두사 순서는 무관하며, 계산은
-    /// 고정 순서(executable → private → readonly)로 적용한다 — `|0o111`과 `&^0o77`은 비가환이라
-    /// 적용 순서가 결과를 바꾸기 때문이다. stackable.
+    /// Applies mode prefixes to `base` (`0o666`). Prefix order in the file name is irrelevant;
+    /// application uses a fixed order (executable → private → readonly) because `|0o111` and
+    /// `&^0o77` do not commute, so order would change the result. Stackable.
     pub fn from_modes(modes: &[crate::domain::name::Mode]) -> Self {
         use crate::domain::name::Mode;
         let mut mode = FileMode::base();
@@ -109,51 +109,51 @@ impl FileMode {
     }
 }
 
-/// payload 엔트리 하나(write 단계 입력).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PayloadEntry {
     pub rel: RelPath,
     pub is_dir: bool,
 }
 
-/// dest 상태 판정 결과(write 단계 confirm 판단용). confirm 자체는 하지 않는다.
+/// Result of a dest-status check (input to the write-stage confirm decision); it does not confirm itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DestStatus {
-    /// 심링크 해석 후 실제 기록 위치.
+    /// The actual write location after resolving symlinks.
     pub final_path: PathBuf,
-    /// per-component containment 통과 여부(false=외부쓰기 confirm 대상).
+    /// Whether per-component containment passed (false → external-write confirm).
     pub inside_target: bool,
-    /// dest가 이미 존재하는지(심링크 자체 포함).
+    /// Whether the dest already exists (including the symlink itself).
     pub exists: bool,
-    /// dest가 심링크인지(심링크 자체, 대상이 아님).
+    /// Whether the dest is a symlink (the link itself, not its target).
     pub is_symlink: bool,
 }
 
-/// `ensure_target`의 결과. target을 우리가 만들었는지(실패 시 정리 대상) 사전에 존재했는지
-/// (보존)를 구분한다. `exists()` 대신 최종 컴포넌트 배타적 생성으로 판정하므로 `..`/create-race
-/// 오판정이 없다.
+/// Result of `ensure_target`: whether we created the target (cleanup candidate on failure)
+/// or it pre-existed (preserved). Decided by exclusively creating the final component rather
+/// than `exists()`, so there is no `..`/create-race misjudgment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetPreparation {
-    /// 이번 실행이 최종 컴포넌트를 새로 만들었다 → 실패 시 정리 대상.
+    /// This run created the final component → cleanup candidate on failure.
     Created,
-    /// 최종 컴포넌트가 이미 있었다 → 실패해도 정리하지 않는다(사용자 데이터).
+    /// The final component already existed → never cleaned up on failure (user data).
     Existing,
 }
 
-/// payload 열거/읽기 + target 쓰기 포트. infra가 구현한다.
+/// Port for enumerating/reading payload and writing to the target; implemented by infra.
 pub trait PayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>>;
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>>;
-    /// target 디렉토리를 준비한다(plan 이후 write 직전 호출). 경로를 lexical 정규화한 뒤 실효
-    /// 경로의 부모를 만들고 최종 컴포넌트를 배타적으로 생성해, 새로 만들었으면 `Created`, 이미
-    /// 있었으면 `Existing`을 반환한다. 최종 위치에 디렉토리가 아닌 것(파일·비-디렉토리 symlink)이
-    /// 있으면 오류(우리가 만들지 않았으므로 정리 대상 아님).
+    /// Prepares the target directory (called after plan, just before write). Lexically
+    /// normalizes the path, creates the effective parent, and exclusively creates the final
+    /// component: `Created` if new, `Existing` if already present. Errors if the final
+    /// location holds a non-directory (file or non-directory symlink), since we did not create it.
     fn ensure_target(&self, target_root: &Path) -> Result<TargetPreparation>;
-    /// 준비 단계가 만든 exact target 경로를 재귀 삭제한다(실패 정리용). 렌더 경로가 아니라
-    /// 준비된 target root에만 호출한다.
+    /// Recursively removes the exact target path the prepare step created (failure cleanup).
+    /// Called only on the prepared target root, never on a rendered path.
     fn cleanup_target(&self, target_root: &Path) -> Result<()>;
-    /// payload 파일 하나를 원자적으로 쓴다. `overwrite`가 false면 dest가 새로 생겨야 하며, 경쟁으로
-    /// dest가 먼저 생기면 조용히 덮지 않고 실패한다(no-clobber). true면 기존 dest를 원자 교체한다.
+    /// Atomically writes one payload file. With `overwrite` false the dest must be newly
+    /// created — if a race creates it first, this fails rather than clobbering (no-clobber).
+    /// With `overwrite` true it atomically replaces the existing dest.
     fn write_file(
         &self,
         target_root: &Path,
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn from_modes_is_prefix_order_independent() {
         use crate::domain::name::Mode;
-        // 파일명 접두사 순서가 달라도 고정 계산 순서로 같은 결과.
+        // Different prefix order in the name, same result via the fixed computation order.
         let a = FileMode::from_modes(&[Mode::Executable, Mode::Private]);
         let b = FileMode::from_modes(&[Mode::Private, Mode::Executable]);
         assert_eq!(a.bits(), b.bits());
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn from_modes_all_three_stacked() {
         use crate::domain::name::Mode;
-        // exec(|0o111) → private(&^0o77) → readonly(&^0o222): 0o777→0o700→0o500(execute 유지, write 제거).
+        // exec(|0o111) → private(&^0o77) → readonly(&^0o222): 0o777→0o700→0o500 (keeps execute, drops write).
         let m = FileMode::from_modes(&[Mode::Readonly, Mode::Executable, Mode::Private]);
         assert_eq!(m.bits(), 0o500);
     }
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn from_modes_two_way_combos() {
         use crate::domain::name::Mode;
-        // 전체 계약을 잠근다(umask 전 8개 결과 중 2-way 조합).
+        // Locks the full contract (the 2-way combos among the 8 pre-umask results).
         // exec+readonly: 0o777 &^0o222 = 0o555.
         assert_eq!(
             FileMode::from_modes(&[Mode::Executable, Mode::Readonly]).bits(),

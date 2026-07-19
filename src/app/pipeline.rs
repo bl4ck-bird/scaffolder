@@ -1,8 +1,6 @@
-//! apply 라이프사이클 조립: 매니페스트 파싱 → answer 확정 → data 병합(`[data]`+`data/*.toml`)
-//! → plan(부작용 없음, `.scaffoldignore` 매칭 출력 경로는 제외) → dry-run이면 종료
-//! → 훅 confirm(부작용 전 단일 게이트) → before 훅 → write(overwrite/외부쓰기 confirm
-//! 반영) → after 훅. partials는 `Renderer` 포트에 주입된다. 훅 오케스트레이션은 `app::hooks`가
-//! 맡고 여기는 포트 배선만 한다. 도메인 포트만 사용한다.
+//! Assembles the apply lifecycle: parse manifest → resolve answers → merge data → plan
+//! (side-effect-free) → hook confirm → before hooks → write → after hooks. Uses only domain
+//! ports; hook orchestration lives in `app::hooks`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -33,7 +31,7 @@ pub struct ApplyRequest {
     pub defaults_only: bool,
     pub interactive: bool,
     pub dry_run: bool,
-    /// target 준비 후 실패 시 우리가 만든(`Created`) target을 정리할지. false면 보존한다.
+    /// Whether to clean up a target we created (`Created`) if a post-prepare step fails; false preserves it.
     pub cleanup_on_failure: bool,
 }
 
@@ -50,7 +48,7 @@ pub struct ApplyReport {
     pub planned: Vec<PlannedWrite>,
 }
 
-/// `apply`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
+/// The ports `apply` uses (a parameter object to keep the argument count down).
 pub struct ApplyPorts<'a> {
     pub manifest_src: &'a dyn ManifestSource,
     pub data_source: &'a dyn DataSource,
@@ -64,13 +62,13 @@ pub struct ApplyPorts<'a> {
     pub hook_runner: &'a dyn HookRunner,
 }
 
-/// `resolve_answers`가 쓰는 포트 묶음(인자 개수 축소용 parameter object).
+/// The ports `resolve_answers` uses (a parameter object).
 struct AnswerPorts<'a> {
     answer_source: &'a dyn AnswerSource,
     condition_evaluator: &'a dyn ConditionEvaluator,
 }
 
-/// dry-run 이후 수집된 훅 묶음. 인라인 훅은 `manifest`를 빌리므로 수명이 얽혀 있다.
+/// Hooks collected after dry-run. Inline hooks borrow `manifest`, hence the tied lifetime.
 struct CollectedHooks<'a> {
     before_inline: Vec<&'a Hook>,
     before_scripts: Vec<HookScript>,
@@ -117,11 +115,11 @@ pub fn apply(
         &builtins,
     )?;
 
-    // answers는 build_context에 이동되기 전에 훅 env로 스냅샷해 둔다.
+    // Snapshot answers into hook env before they are moved into build_context.
     let hook_env_map = hook_env(&answers);
 
-    // answer 확정 이후 data를 병합한다. `[data]`(manifest)를 base로 `data/*.toml`을
-    // lexical 순서로 fold한다(단일 left-fold).
+    // Merge data after answers are resolved: fold data/*.toml (lexical order) onto the
+    // manifest [data] base (a single left-fold).
     let data = ports.data_source.load(&req.template_root, manifest.data)?;
     let ctx = build_context(answers, Some(data), builtins);
     let matcher = ports.ignore_source.load(&req.template_root, &ctx)?;
@@ -132,7 +130,7 @@ pub fn apply(
         return Ok(ApplyReport { planned });
     }
 
-    // dry-run 이후에만 훅을 수집한다 — dry-run은 훅과 무관하다.
+    // Collect hooks only after dry-run — dry-run does not touch hooks.
     let hooks = CollectedHooks {
         before_inline: collect_active_inline(
             &manifest.hooks.before,
@@ -152,13 +150,13 @@ pub fn apply(
             .scripts(&req.template_root, HookPhase::After)?,
     };
 
-    // before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
+    // Confirm all before+after hooks once, before any side effect (target creation, writes).
     if !hooks.is_empty() && !ports.confirmer.confirm_hook(&hooks.describe()) {
         bail!("hook execution was not confirmed; aborting before any writes");
     }
 
-    // target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
-    // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
+    // Create the target after the side-effect-free plan. Render and source-conflict errors
+    // already failed in plan, so reaching here leaves no empty target.
     let prep = ports.payload.ensure_target(&req.target_root)?;
 
     let outcome = execute_side_effects(req, &planned, &ctx, &hooks, &hook_env_map, &ports);
@@ -167,9 +165,9 @@ pub fn apply(
     Ok(ApplyReport { planned })
 }
 
-/// 부작용 없는 plan 단계: payload 엔트리를 열거해 파일명 문법을 파싱하고, `.scaffoldignore`
-/// 매칭 출력 경로를 제외하며, 소스 충돌(다른 엔트리가 같은 출력 경로로 매핑)을 검출하고,
-/// `.jinja` 엔트리를 렌더한 `PlannedWrite` 목록을 만든다.
+/// The side-effect-free plan step: enumerates payload entries, parses file-name grammar,
+/// excludes `.scaffoldignore`-matched output paths, detects source conflicts (two entries
+/// mapping to the same output path), and renders `.jinja` entries into `PlannedWrite`s.
 fn plan_writes(
     req: &ApplyRequest,
     ctx: &AnswerContext,
@@ -230,9 +228,9 @@ fn plan_writes(
     Ok(planned)
 }
 
-/// prepare 이후의 모든 부작용을 순서대로 실행한다: before-hook → write(엔트리별 containment/
-/// overwrite/외부쓰기 게이트) → after-hook. 어느 단계에서 실패하든 첫 `Err`를 반환하며, 정리
-/// 여부 판단은 호출자(`cleanup_created_target_on_failure`)가 한다.
+/// Runs every side effect after prepare, in order: before hooks → writes (per-entry
+/// containment/overwrite/external-write gates) → after hooks. Returns the first `Err`; the
+/// caller (`cleanup_created_target_on_failure`) decides whether to clean up.
 fn execute_side_effects(
     req: &ApplyRequest,
     planned: &[PlannedWrite],
@@ -256,8 +254,8 @@ fn execute_side_effects(
             .payload
             .dest_status(&req.target_root, &planned_write.rel)?;
 
-        // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
-        // 계속한다(overwrite와 달리 hard-fail이 아니다).
+        // A write escaping the target is confirmed; if declined, skip only that entry and
+        // continue (unlike overwrite, not a hard fail).
         if !status.inside_target && !ports.confirmer.confirm_external_write(&status.final_path) {
             eprintln!(
                 "warning: skipping {} — write escapes target and was not confirmed",
@@ -295,10 +293,10 @@ fn execute_side_effects(
     Ok(())
 }
 
-/// prepare 이후 부작용의 정리 가드. `outcome`이 `Err`이고 우리가 만든(`Created`) target이며
-/// 정리가 켜져 있을 때만 best-effort로 삭제한 뒤 **원래 에러**를 전파한다(정리 실패는 경고만).
-/// 사전 존재(`Existing`) target과 정리 off는 부분 산출물을 남기고 보존하며, `Ok`는 그대로
-/// 통과시킨다. prepare 자체 실패는 이 함수 호출 전이라 정리 대상이 아니다.
+/// Cleanup guard for post-prepare side effects. Only when `outcome` is `Err`, the target was
+/// `Created`, and cleanup is on does it best-effort delete, then propagate the **original**
+/// error (a cleanup failure only warns). `Existing` targets and cleanup-off preserve partial
+/// output; `Ok` passes through. A prepare failure occurs before this call, so it is not cleaned.
 fn cleanup_created_target_on_failure(
     outcome: Result<()>,
     prep: TargetPreparation,
@@ -319,20 +317,21 @@ fn cleanup_created_target_on_failure(
     Err(e)
 }
 
-/// 질문을 선언 순서대로 증분 처리해 answer를 확정한다. 매 질문마다 `when`은 지금까지
-/// 확정된 answers + builtins로만 평가한다(뒤 질문은 아직 컨텍스트에 없어 참조 시 에러).
+/// Resolves answers by processing questions incrementally in declaration order. For each
+/// question, `when` is evaluated against only the answers resolved so far + builtins (a later
+/// question is not yet in context, so referencing it errors).
 ///
-/// - `when` 없음, 또는 `when` active: 아래 precedence로 확정해 넣는다.
-///   1. `--answers`(raw 문자열, `coerce`로 타입 변환)
-///   2. `--answers-file`(이미 타입이 정해진 값)
-///   3. `--defaults`면 question default(없으면 에러 — 프롬프트로 폴백하지 않는다)
-///   4. 대화형이면 `answer_source.ask`
-///   5. 그 외(비대화형·`--defaults` 아님)는 default(없으면 에러)
-/// - `when` inactive: 준 답변(`--answers`/`--answers-file`)은 무시한다. default가 있으면
-///   그 값을 넣고, 없으면 넣지 않는다(컨텍스트에서 부재).
+/// - No `when`, or active `when`: resolve by this precedence and insert.
+///   1. `--answers` (raw string, type-converted with `coerce`)
+///   2. `--answers-file` (already-typed value)
+///   3. `--defaults`: the question default (error if none — no fallback to prompting)
+///   4. interactive: `answer_source.ask`
+///   5. otherwise (non-interactive, not `--defaults`): the default (error if none)
+/// - Inactive `when`: given answers (`--answers`/`--answers-file`) are ignored. If a default
+///   exists it is inserted, otherwise nothing is (absent from context).
 ///
-/// 확정된 값(active 값·inactive default 값)마다 `validate_choice`로 검증한다.
-/// `--answers`/`--answers-file`의 미매칭 키는 경고만 하고 계속 진행한다.
+/// Every resolved value (active values and inactive defaults) is checked with `validate_choice`.
+/// Unmatched `--answers`/`--answers-file` keys only warn and continue.
 fn resolve_answers(
     questions: &[Question],
     raw_answers: &BTreeMap<String, String>,
@@ -347,8 +346,8 @@ fn resolve_answers(
     for question in questions {
         let active = match &question.when {
             Some(when) => {
-                // data 병합(step 3)은 answer 확정(step 2) 이후다. 따라서 `when`은 앞선
-                // 답변 + builtins만 참조하며 data 네임스페이스는 컨텍스트에서 부재다(None).
+                // Data merge (step 3) happens after answers are resolved (step 2), so `when`
+                // sees only earlier answers + builtins; the data namespace is absent (None).
                 let ctx = build_context(resolved.clone(), None, builtins.clone());
                 ports.condition_evaluator.is_active(when, &ctx)?
             }
@@ -468,8 +467,8 @@ mod tests {
         }
     }
 
-    /// 훅 confirm을 항상 거절하는 테스트용 `Confirmer` — 나머지 게이트는 `FakeConfirmer`와 동일하게
-    /// 항상 승인한다(이 게이트만 격리 검증하기 위함).
+    /// Test `Confirmer` that always declines the hook confirm; the other gates always approve
+    /// (so this gate can be verified in isolation).
     struct DecliningHookConfirmer;
     impl Confirmer for DecliningHookConfirmer {
         fn confirm_hook(&self, _description: &str) -> bool {
@@ -483,7 +482,7 @@ mod tests {
         }
     }
 
-    /// 폴더 스크립트가 없는(빈) 테스트용 `HookSource`.
+    /// Test `HookSource` with no folder scripts (empty).
     struct FakeHookSource;
     impl HookSource for FakeHookSource {
         fn scripts(&self, _template_root: &Path, _phase: HookPhase) -> Result<Vec<HookScript>> {
@@ -491,7 +490,7 @@ mod tests {
         }
     }
 
-    /// 실제 프로세스를 실행하지 않고 호출만 기록하는 테스트용 `HookRunner`.
+    /// Test `HookRunner` that records calls instead of running a real process.
     struct FakeHookRunner {
         calls: RefCell<Vec<String>>,
     }
@@ -535,7 +534,7 @@ mod tests {
         }
     }
 
-    /// before/after 훅 실행이 실패하는 상황을 주입하는 테스트용 `HookRunner`(정리 가드 검증용).
+    /// Test `HookRunner` that injects a before/after hook failure (for the cleanup guard).
     struct FailingHookRunner;
     impl HookRunner for FailingHookRunner {
         fn run_inline(
@@ -565,9 +564,8 @@ mod tests {
         }
     }
 
-    /// 고정값을 반환하거나(`returning`), 호출되면 실패해야 함을 표시하는(`unreachable`)
-    /// 테스트용 `AnswerSource`. precedence가 프롬프트를 건너뛰어야 하는 경로에서
-    /// `ask`가 호출되지 않았음을 검증하는 데 쓴다.
+    /// Test `AnswerSource` returning a fixed value (`returning`) or asserting it must not be
+    /// called (`unreachable`). Used to verify `ask` is skipped when precedence bypasses prompting.
     struct FakeAnswerSource {
         value: Option<AnswerValue>,
         called: RefCell<bool>,
@@ -596,8 +594,7 @@ mod tests {
         }
     }
 
-    /// 고정 `default`를 반환하되 특정 `when` 문자열에는 `overrides`로 결과를 지정할 수 있는
-    /// 테스트용 `ConditionEvaluator`.
+    /// Test `ConditionEvaluator` returning a fixed `default`, overridable per `when` string via `overrides`.
     struct FakeConditionEvaluator {
         default: bool,
         overrides: HashMap<String, bool>,
@@ -616,9 +613,9 @@ mod tests {
         }
     }
 
-    /// `when`을 앞선 질문명 그대로 참조하게 해 증분 컨텍스트 순서를 검증하는 테스트용
-    /// `ConditionEvaluator`. `ctx.answer(when)`이 `Bool`이면 그 값을, 없으면(아직 확정되지
-    /// 않은 뒤 질문을 참조하면) 에러를 낸다.
+    /// Test `ConditionEvaluator` that references `when` as an earlier question name, to verify
+    /// incremental context order. Returns the `Bool` answer if present, else errors (a
+    /// not-yet-resolved later question).
     struct AnswerRefConditionEvaluator;
     impl ConditionEvaluator for AnswerRefConditionEvaluator {
         fn is_active(&self, when: &str, ctx: &AnswerContext) -> Result<bool> {
@@ -630,28 +627,28 @@ mod tests {
         }
     }
 
-    /// 소스 충돌 유발용: 서로 다른 basename이 같은 출력 rel로 매핑되도록(둘 다 verbatim,
-    /// `.jinja` strip 후 동일) 두 엔트리를 반환한다.
+    /// For source-conflict setups: returns two entries whose different basenames map to the
+    /// same output rel (both verbatim, equal after `.jinja` strip).
     struct FakePayloadStore {
         entries: Vec<PayloadEntry>,
         contents: HashMap<String, Vec<u8>>,
         dest_statuses: RefCell<HashMap<String, DestStatus>>,
         written: RefCell<Vec<(RelPath, Vec<u8>)>>,
-        /// `ensure_target`이 반환할 판정(테스트별로 Created/Existing 지정).
+        /// The verdict `ensure_target` returns (Created/Existing per test).
         prep: TargetPreparation,
-        /// `cleanup_target`이 호출됐는지 기록.
+        /// Records whether `cleanup_target` was called.
         cleaned: RefCell<bool>,
-        /// true면 `cleanup_target`이 호출은 기록하되 에러를 반환한다(원래 에러 우선 전파 검증용).
+        /// When true, `cleanup_target` records the call but returns an error (so the original error still wins).
         cleanup_fails: bool,
-        /// `cleanup_target`이 받은 경로(exact prepared root 전달 검증용).
+        /// The path `cleanup_target` received (to verify the exact prepared root is passed).
         cleaned_path: RefCell<Option<PathBuf>>,
-        /// `ensure_target`이 호출됐는지 기록(pre-prepare 실패 시 미호출 검증용).
+        /// Records whether `ensure_target` was called (to verify it is not on a pre-prepare failure).
         prepared: RefCell<bool>,
-        /// true면 `write_file`이 실제 I/O 실패를 흉내 내 에러를 반환한다.
+        /// When true, `write_file` simulates a real I/O failure and returns an error.
         write_fails: bool,
-        /// true면 `dest_status`가 에러를 반환한다(post-prepare 실패 경로 검증용).
+        /// When true, `dest_status` returns an error (to exercise the post-prepare failure path).
         dest_status_fails: bool,
-        /// true면 `ensure_target`이 에러를 반환한다(prepare 자체 실패 → cleanup 미호출 검증용).
+        /// When true, `ensure_target` returns an error (prepare itself fails → verify cleanup is not called).
         prepare_fails: bool,
     }
 
@@ -720,8 +717,7 @@ mod tests {
         }
     }
 
-    /// 고정된 rel 집합만 제외하는(또는 빈 집합이면 아무것도 제외하지 않는) 테스트용
-    /// `IgnoreSource`.
+    /// Test `IgnoreSource` that excludes only a fixed set of rels (or nothing when empty).
     struct FakeIgnoreSource {
         ignored: Vec<String>,
     }
@@ -949,9 +945,9 @@ mod tests {
 
     #[test]
     fn external_write_without_confirmation_is_skipped_not_written() {
-        // rel 문자열은 `safe_rel_path`가 literal '..'을 이미 거부하므로 항상 정상 형태다;
-        // containment 이탈은 상위 심링크 등 최종 경로 해석 단계에서만 드러난다.
-        // 미승인 외부쓰기는 그 엔트리만 스킵하고 apply는 성공한다.
+        // The rel string is always well-formed (safe_rel_path already rejects literal '..');
+        // a containment escape only shows up at final-path resolution (e.g. an ancestor
+        // symlink). An unconfirmed external write skips just that entry and apply still succeeds.
         let manifest = Manifest {
             questions: vec![],
             ..Default::default()
@@ -1462,7 +1458,7 @@ mod tests {
 
     #[test]
     fn when_referencing_a_later_unresolved_question_errors() {
-        // 증분 컨텍스트 확인: `when`이 뒤 질문을 참조하면 아직 확정되지 않았으므로 에러다.
+        // Incremental context check: a `when` referencing a later question errors, since it is not yet resolved.
         let dependent = string_question_with_when("dependent", None, "gate");
         let gate = bool_question("gate", None, None);
         let mut raw = BTreeMap::new();
@@ -1604,7 +1600,7 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                // dry-run이 훅 collection·confirm 자체를 건너뛴다면 거절 confirmer라도 무해해야 한다.
+                // If dry-run skips hook collection/confirm entirely, even a declining confirmer is harmless.
                 confirmer: &DecliningHookConfirmer,
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
@@ -1622,10 +1618,10 @@ mod tests {
         );
     }
 
-    // --- 실패 시 target 정리 가드 ---
+    // --- target cleanup guard on failure ---
 
-    /// overwrite 거부로 write 단계에서 실패하는 store(정리 가드 검증용). dest가 이미 존재한다고
-    /// 보고하므로 `confirm_overwrite=false`면 write loop에서 bail한다.
+    /// Store that fails in the write step via overwrite refusal (for the cleanup guard). It
+    /// reports the dest already exists, so with `confirm_overwrite=false` the write loop bails.
     fn overwrite_conflict_store(prep: TargetPreparation, cleanup_fails: bool) -> FakePayloadStore {
         let mut dest_statuses = HashMap::new();
         dest_statuses.insert(
@@ -1676,7 +1672,7 @@ mod tests {
         }
     }
 
-    /// 정리 가드 테스트용 apply 실행: overwrite 거부(post-prepare 실패)를 유발하고 결과를 반환한다.
+    /// Runs apply for the cleanup-guard tests: induces overwrite refusal (a post-prepare failure) and returns the result.
     fn run_with_overwrite_conflict(
         manifest: Manifest,
         store: &FakePayloadStore,
@@ -1703,7 +1699,7 @@ mod tests {
         )
     }
 
-    // 정리 가드를 `apply` 통과 없이 직접 격리 검증한다(가드의 6분기 중 핵심 조합).
+    // Verifies the cleanup guard directly, without going through `apply` (the key combos of its 6 branches).
 
     #[test]
     fn cleanup_guard_cleans_created_target_when_enabled_and_preserves_error() {
@@ -1795,8 +1791,8 @@ mod tests {
 
     #[test]
     fn created_target_is_cleaned_up_on_write_io_failure() {
-        // 실제 write_file I/O 실패를 주입한다(overwrite 거부 대리가 아님). 또한 정리가 정확히
-        // 준비된 target root 경로로 호출되는지 검증한다.
+        // Injects a real write_file I/O failure (not an overwrite-refusal proxy). Also verifies
+        // cleanup is called with exactly the prepared target root path.
         let store = FakePayloadStore {
             entries: vec![PayloadEntry {
                 rel: safe_rel_path("file.txt").unwrap(),
@@ -1848,7 +1844,7 @@ mod tests {
 
     #[test]
     fn created_target_is_cleaned_up_on_dest_status_failure() {
-        // dest_status 오류도 post-prepare 실패 경로이므로 동일 정책(정리)을 받는다.
+        // A dest_status error is also a post-prepare failure path, so it gets the same policy (cleanup).
         let store = FakePayloadStore {
             entries: vec![PayloadEntry {
                 rel: safe_rel_path("file.txt").unwrap(),
@@ -1947,7 +1943,7 @@ mod tests {
 
     #[test]
     fn created_target_is_cleaned_up_on_after_hook_failure() {
-        // before는 비고 after만 실패 → write까지 성공한 뒤 after-hook에서 실패해도 정리된다.
+        // before empty, only after fails → even after writes succeed, an after-hook failure still cleans up.
         let manifest = Manifest {
             questions: vec![],
             hooks: crate::domain::hook::Hooks {
@@ -1959,8 +1955,8 @@ mod tests {
             },
             ..Default::default()
         };
-        // payload를 실제로 배치(write 성공)한 뒤 after-hook에서 실패시켜, "완성된 산출물까지
-        // 포함해" target이 정리됨을 증명한다.
+        // Actually writes the payload (write succeeds), then fails in the after-hook, proving the
+        // target is cleaned up "including the finished output".
         let store = FakePayloadStore {
             entries: vec![PayloadEntry {
                 rel: safe_rel_path("file.txt").unwrap(),
@@ -2091,7 +2087,7 @@ mod tests {
         let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(true));
         let err = result.expect_err("apply must fail");
         assert!(*store.cleaned.borrow(), "cleanup must have been attempted");
-        // 원래(overwrite) 에러가 정리 실패 에러로 대체되지 않는다.
+        // The original (overwrite) error is not replaced by the cleanup-failure error.
         assert!(
             err.to_string().contains("exists"),
             "original error must survive, got: {err}"
@@ -2100,7 +2096,7 @@ mod tests {
 
     #[test]
     fn pre_prepare_failure_does_not_clean_up() {
-        // 답변 누락으로 ensure_target 이전(resolve_answers)에서 실패 → 정리 대상 없음.
+        // A missing answer fails before ensure_target (in resolve_answers) → nothing to clean up.
         let manifest = Manifest {
             questions: vec![string_question("project", None)],
             ..Default::default()
@@ -2151,7 +2147,7 @@ mod tests {
 
     #[test]
     fn prepare_failure_itself_does_not_clean_up() {
-        // ensure_target 자체가 실패하면(권한 등) 준비된 target이 없으므로 정리하지 않는다.
+        // If ensure_target itself fails (permissions, etc.) there is no prepared target, so nothing is cleaned up.
         let store = FakePayloadStore {
             entries: vec![],
             contents: HashMap::new(),

@@ -1,4 +1,4 @@
-//! 순수 도메인 모델과 포트 트레잇. 표준 라이브러리 + `anyhow`(에러)만 의존.
+//! Pure domain model and port traits; depends only on std and `anyhow`.
 
 pub mod answer;
 pub mod data;

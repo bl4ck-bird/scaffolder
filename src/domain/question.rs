@@ -1,5 +1,4 @@
-//! `Question`, `QuestionType`(select/multiselect/string/int/float/boolean),
-//! `Choice { label, value }`.
+//! Question definitions and their validation.
 
 use std::collections::HashSet;
 
@@ -17,7 +16,7 @@ pub enum QuestionType {
     Boolean,
 }
 
-/// select/multiselect choice. 값은 리터럴 타입을 유지한다(라벨≠값은 `{label, value}`).
+/// A select/multiselect choice; the value keeps its literal type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice {
     pub label: String,
@@ -37,7 +36,7 @@ pub struct Question {
 
 const RESERVED_NAMES: [&str; 4] = ["name", "scaffolder", "data", "env"];
 
-/// 질문명이 identifier `[A-Za-z_][A-Za-z0-9_]*`이고 예약어가 아닌지 검증한다.
+/// Validates that a question name is an identifier `[A-Za-z_][A-Za-z0-9_]*` and not reserved.
 pub fn validate_question_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     let starts_ok = chars
@@ -57,7 +56,7 @@ pub fn validate_question_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// 대소문자 무시 유일성 검증.
+/// Validates case-insensitive uniqueness.
 pub fn validate_unique_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<()> {
     let mut seen = HashSet::new();
     for name in names {
@@ -68,9 +67,8 @@ pub fn validate_unique_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Re
     Ok(())
 }
 
-/// select/multiselect choice 값이 콤마·공백을 포함하지 않는지, 그리고 multiselect choice가
-/// 문자열 값만 쓰는지(현재 `AnswerValue::List`가 원소 타입을 보존하지 못하므로) 검증한다.
-/// choices가 없는 타입은 항상 Ok.
+/// Validates that choice values contain no comma or whitespace, and that multiselect
+/// choices are strings (this version's `AnswerValue::List` does not preserve element types).
 pub fn validate_choices(question: &Question) -> Result<()> {
     match question.qtype {
         QuestionType::Select | QuestionType::Multiselect => {

@@ -1,8 +1,8 @@
-//! dry-run plan 출력 포매팅.
+//! Formatting for the dry-run plan output.
 
 use crate::app::pipeline::ApplyReport;
 
-/// `ApplyReport`를 사람이 읽는 라인으로 렌더링한다(줄마다 `would write: <rel> (rendered|verbatim)`).
+/// Renders an `ApplyReport` as human-readable lines (`would write: <rel> (rendered|verbatim)`).
 pub fn format_plan(report: &ApplyReport) -> String {
     report
         .planned

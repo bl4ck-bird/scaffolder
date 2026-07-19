@@ -1,4 +1,4 @@
-//! 유스케이스 계층. 도메인 포트만 사용하고 sink를 주입받는다.
+//! Use-case layer. Uses only domain ports and takes injected sinks.
 
 pub mod hooks;
 pub mod pipeline;

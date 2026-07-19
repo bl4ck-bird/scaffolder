@@ -1,5 +1,6 @@
-//! 훅 오케스트레이션: 인라인 `when` 판정, confirm 설명 조립, phase별 실행(인라인 선언 순서 →
-//! 폴더 스크립트 lexical). `pipeline`은 이 모듈을 호출해 포트 배선만 담당한다.
+//! Hook orchestration: inline `when` evaluation, confirm-description assembly, and per-phase
+//! execution (inline in declaration order, then folder scripts in lexical order). `pipeline`
+//! calls into this module and only wires ports.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,8 +11,8 @@ use crate::domain::answer::{AnswerContext, ConditionEvaluator};
 use crate::domain::hook::{Hook, HookRunner, HookScript};
 use crate::domain::render::Renderer;
 
-/// 인라인 훅 중 active한 것만 선언 순서로 남긴다. `when` 없으면 active, 있으면 질문의 `when`과
-/// 같은 evaluator로 판정한다.
+/// Keeps only active inline hooks, in declaration order. No `when` means active; a `when` is
+/// evaluated with the same evaluator as question `when`.
 pub fn collect_active_inline<'a>(
     hooks: &'a [Hook],
     ctx: &AnswerContext,
@@ -30,8 +31,8 @@ pub fn collect_active_inline<'a>(
     Ok(active)
 }
 
-/// 부작용 전 단일 confirm 게이트에 쓸 설명. before/after 각각 인라인(선언 순서) →
-/// 폴더 스크립트(lexical) 순으로 한 줄씩 나열한다.
+/// Description for the single pre-side-effect confirm gate. Lists before then after, each as
+/// inline (declaration order) followed by folder scripts (lexical), one per line.
 pub fn confirm_description(
     before_inline: &[&Hook],
     before_scripts: &[HookScript],
@@ -68,10 +69,10 @@ fn script_name(script: &HookScript) -> &str {
     }
 }
 
-/// confirm 프롬프트는 임의 코드 실행 앞의 유일 방어선이라, untrusted 템플릿 저자가 넣은
-/// 제어문자(CR·ANSI 이스케이프 등)로 터미널 표시를 스푸핑하지 못하게 이스케이프한다. printable
-/// 문자와 비-ASCII는 그대로 보존한다(`str::escape_default`는 이들까지 과도하게 이스케이프하므로
-/// 쓰지 않는다).
+/// The confirm prompt is the only guard before arbitrary code runs, so escape control
+/// characters (CR, ANSI escapes, …) an untrusted template author might use to spoof the
+/// terminal display. Printable and non-ASCII characters are preserved (`str::escape_default`
+/// over-escapes those, so it is not used).
 fn sanitize_for_display(s: &str) -> String {
     s.chars()
         .flat_map(|c| {
@@ -84,8 +85,8 @@ fn sanitize_for_display(s: &str) -> String {
         .collect()
 }
 
-/// 한 phase를 실행한다: 인라인(선언 순서) 먼저, 그 다음 폴더 스크립트(이미 lexical). Template
-/// 스크립트는 `renderer`로 렌더 후 `run_rendered`로 실행한다.
+/// Runs one phase: inline (declaration order) first, then folder scripts (already lexical).
+/// A `Template` script is rendered with `renderer`, then run via `run_rendered`.
 pub fn run_phase(
     runner: &dyn HookRunner,
     renderer: &dyn Renderer,
