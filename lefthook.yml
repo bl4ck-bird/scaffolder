@@ -1,0 +1,22 @@
+# Git hooks (lefthook). Install once with `lefthook install`.
+# Fast, offline checks on commit; the slow test suite on push.
+# Supply-chain linting (cargo-deny) runs in CI, not here — it fetches the
+# advisory DB over the network and would break offline pushes.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt
+      stage_fixed: true
+    clippy:
+      glob: "*.rs"
+      run: cargo clippy --all-targets -- -D warnings
+    typos:
+      run: typos
+
+pre-push:
+  commands:
+    test:
+      run: cargo test
