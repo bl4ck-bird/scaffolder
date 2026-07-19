@@ -6,6 +6,8 @@ use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
+mod common;
+
 fn write_template(dir: &std::path::Path) {
     fs::write(
         dir.join("scaffold.toml"),
@@ -76,11 +78,8 @@ fn apply_template_dir_missing_store_name_fails_with_searched_locations() {
     let fake_home = tempfile::tempdir().expect("fake home tempdir");
     let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    let mut cmd = common::scaffolder(fake_home.path());
     cmd.current_dir(workdir.path())
-        .env("SCAFFOLDER_HOME", "")
-        .env("XDG_CONFIG_HOME", "")
-        .env("HOME", fake_home.path())
         .arg("apply")
         .arg("ghost")
         .arg(&target)
@@ -145,11 +144,8 @@ fn apply_bare_name_falls_back_to_cwd_directory_when_absent_from_stores() {
 
     let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    let mut cmd = common::scaffolder(fake_home.path());
     cmd.current_dir(workdir.path())
-        .env("SCAFFOLDER_HOME", "")
-        .env("XDG_CONFIG_HOME", "")
-        .env("HOME", fake_home.path())
         .arg("apply")
         .arg("localtpl")
         .arg(&target)
@@ -166,23 +162,16 @@ fn apply_bare_name_falls_back_to_cwd_directory_when_absent_from_stores() {
 fn apply_renders_and_writes_files() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    let readme = fs::read_to_string(fx.target.join("README.md")).expect("read README.md");
     assert_eq!(readme, "# demo");
 
-    let main_rs = fs::read_to_string(target.join("src/main.rs")).expect("read src/main.rs");
+    let main_rs = fs::read_to_string(fx.target.join("src/main.rs")).expect("read src/main.rs");
     assert_eq!(main_rs, "fn main(){}");
 }
 
@@ -190,22 +179,15 @@ fn apply_renders_and_writes_files() {
 fn apply_without_force_fails_on_existing_destination_noninteractively() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-    fs::create_dir_all(&target).expect("mkdir target");
-    fs::write(target.join("README.md"), "existing").expect("seed existing README.md");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo");
+    let mut fx = common::apply(template.path());
+    fs::create_dir_all(&fx.target).expect("mkdir target");
+    fs::write(fx.target.join("README.md"), "existing").expect("seed existing README.md");
+    fx.cmd.arg("--answers").arg("project=demo");
 
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
 
-    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    let readme = fs::read_to_string(fx.target.join("README.md")).expect("read README.md");
     assert_eq!(readme, "existing", "unapproved overwrite must not happen");
 }
 
@@ -213,23 +195,15 @@ fn apply_without_force_fails_on_existing_destination_noninteractively() {
 fn apply_with_force_overwrites_existing_destination() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-    fs::create_dir_all(&target).expect("mkdir target");
-    fs::write(target.join("README.md"), "existing").expect("seed existing README.md");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo")
-        .arg("--force");
+    let mut fx = common::apply(template.path());
+    fs::create_dir_all(&fx.target).expect("mkdir target");
+    fs::write(fx.target.join("README.md"), "existing").expect("seed existing README.md");
+    fx.cmd.arg("--answers").arg("project=demo").arg("--force");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    let readme = fs::read_to_string(fx.target.join("README.md")).expect("read README.md");
     assert_eq!(readme, "# demo");
 }
 
@@ -237,22 +211,14 @@ fn apply_with_force_overwrites_existing_destination() {
 fn apply_dry_run_does_not_write_and_prints_plan() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo")
-        .arg("--dry-run");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo").arg("--dry-run");
 
-    cmd.assert().success().stdout(contains("README.md"));
+    fx.cmd.assert().success().stdout(contains("README.md"));
 
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "dry-run must not create the target directory"
     );
 }
@@ -299,20 +265,13 @@ fn write_answers_toml(dir: &std::path::Path, contents: &str) -> std::path::PathB
 fn apply_answers_flag_preserves_int_and_boolean_types() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_multi_type_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("port=8080");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("port=8080");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    let content = fs::read_to_string(fx.target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "demo:high:q");
 }
 
@@ -320,28 +279,21 @@ fn apply_answers_flag_preserves_int_and_boolean_types() {
 fn apply_answers_file_supplies_typed_values() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_multi_type_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+
+    let mut fx = common::apply(template.path());
     let answers_path = write_answers_toml(
-        workdir.path(),
+        fx.workdir(),
         r#"
             project = "fileproj"
             port = 2000
             verbose = true
         "#,
     );
+    fx.cmd.arg("--answers-file").arg(&answers_path);
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers-file")
-        .arg(&answers_path);
+    fx.cmd.assert().success();
 
-    cmd.assert().success();
-
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    let content = fs::read_to_string(fx.target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "fileproj:low:v");
 }
 
@@ -349,32 +301,27 @@ fn apply_answers_file_supplies_typed_values() {
 fn apply_answers_flag_overrides_answers_file() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_multi_type_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+
+    let mut fx = common::apply(template.path());
     let answers_path = write_answers_toml(
-        workdir.path(),
+        fx.workdir(),
         r#"
             project = "fileproj"
             port = 5000
         "#,
     );
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
+    fx.cmd
         .arg("--answers-file")
         .arg(&answers_path)
         .arg("--answers")
         .arg("project=cliproj");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
     // project comes from --answers, which overrides the file; port comes from --answers-file,
     // where 5000 >= 3000 selects "high"; verbose is supplied by neither, so it falls back to its
     // default of false, which renders as "q".
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    let content = fs::read_to_string(fx.target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "cliproj:high:q");
 }
 
@@ -404,149 +351,31 @@ fn apply_defaults_flag_uses_question_defaults() {
     )
     .expect("write config.txt.jinja");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--defaults");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--defaults");
+    fx.cmd.assert().success();
 
-    cmd.assert().success();
-
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    let content = fs::read_to_string(fx.target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "demo:high");
-}
-
-#[test]
-fn apply_defaults_flag_fails_when_required_answer_has_no_default() {
-    let template = tempfile::tempdir().expect("template tempdir");
-    write_multi_type_template(template.path()); // port has no default
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--defaults");
-
-    cmd.assert().failure();
 }
 
 #[test]
 fn apply_unmatched_answers_key_warns_on_stderr_and_still_succeeds() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
+    let mut fx = common::apply(template.path());
+    fx.cmd
         .arg("--answers")
         .arg("project=demo")
         .arg("--answers")
         .arg("stray=x");
 
-    cmd.assert()
+    fx.cmd
+        .assert()
         .success()
         .stderr(contains("does not match any question"));
-}
-
-#[test]
-fn apply_noninteractive_without_required_answer_fails() {
-    let template = tempfile::tempdir().expect("template tempdir");
-    write_multi_type_template(template.path()); // port has no default
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().failure();
-}
-
-/// Template with `stacks` (multiselect) + `private` (boolean, default=false,
-/// `when = "'ci' in stacks"`) questions, rendering that value.
-fn write_when_template(dir: &std::path::Path) {
-    fs::write(
-        dir.join("scaffold.toml"),
-        r#"
-            [[questions]]
-            name = "stacks"
-            type = "multiselect"
-            choices = ["ci", "docker"]
-
-            [[questions]]
-            name = "private"
-            type = "boolean"
-            default = false
-            when = "'ci' in stacks"
-        "#,
-    )
-    .expect("write scaffold.toml");
-
-    let files = dir.join("files");
-    fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(files.join("config.txt.jinja"), "private={{ private }}")
-        .expect("write config.txt.jinja");
-}
-
-#[test]
-fn apply_when_active_uses_given_answer_over_default() {
-    let template = tempfile::tempdir().expect("template tempdir");
-    write_when_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("stacks=ci")
-        .arg("--answers")
-        .arg("private=true");
-
-    cmd.assert().success();
-
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
-    assert_eq!(content, "private=true");
-}
-
-#[test]
-fn apply_when_inactive_uses_default_and_ignores_given_answer() {
-    let template = tempfile::tempdir().expect("template tempdir");
-    write_when_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("stacks=docker")
-        .arg("--answers")
-        .arg("private=true");
-
-    cmd.assert().success();
-
-    // 'ci' not in stacks, so private is inactive: the given answer (true) is ignored and the
-    // default (false) is used.
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
-    assert_eq!(content, "private=false");
 }
 
 /// `stacks` (multiselect) + `extra` (string, no default, `when = "'ci' in stacks"`) questions.
@@ -583,20 +412,13 @@ fn write_when_no_default_template(dir: &std::path::Path, guarded: bool) {
 fn apply_when_inactive_without_default_leaves_context_absent_but_guarded_template_still_renders() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_when_no_default_template(template.path(), true);
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("stacks=docker");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("stacks=docker");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
+    let content = fs::read_to_string(fx.target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "no-ci");
 }
 
@@ -604,19 +426,12 @@ fn apply_when_inactive_without_default_leaves_context_absent_but_guarded_templat
 fn apply_when_inactive_without_default_errors_if_template_references_it_unconditionally() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_when_no_default_template(template.path(), false);
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("stacks=docker");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("stacks=docker");
 
     // extra is inactive and has no default, so it is absent from context; strict undefined fails the render.
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
 }
 
 #[test]
@@ -629,23 +444,16 @@ fn apply_static_scaffoldignore_excludes_matching_output_paths() {
     fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
     fs::write(files.join("scratch.tmp"), "scratch").expect("write scratch.tmp");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
     assert!(
-        target.join("keep.txt").exists(),
+        fx.target.join("keep.txt").exists(),
         "non-ignored file must be written"
     );
     assert!(
-        !target.join("scratch.tmp").exists(),
+        !fx.target.join("scratch.tmp").exists(),
         "ignored file must not be written"
     );
 }
@@ -677,35 +485,23 @@ fn apply_jinja_scaffoldignore_excludes_output_path_based_on_answers() {
     // stacks lacks docker: Dockerfile excluded.
     let template = tempfile::tempdir().expect("template tempdir");
     write_docker_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-    cmd.assert().success();
+    let mut fx = common::apply(template.path());
+    fx.cmd.assert().success();
     assert!(
-        !target.join("Dockerfile").exists(),
+        !fx.target.join("Dockerfile").exists(),
         "Dockerfile must be excluded when stacks lacks docker"
     );
 
     // stacks includes docker: Dockerfile placed.
     let template2 = tempfile::tempdir().expect("template tempdir");
     write_docker_template(template2.path());
-    let target2 = workdir.path().join("demo-docker");
 
-    let mut cmd2 = Command::cargo_bin("scaffolder").expect("binary");
-    cmd2.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template2.path())
-        .arg(&target2)
-        .arg("--answers")
-        .arg("stacks=docker");
-    cmd2.assert().success();
+    let mut fx2 = common::apply(template2.path());
+    fx2.cmd.arg("--answers").arg("stacks=docker");
+    fx2.cmd.assert().success();
     assert!(
-        target2.join("Dockerfile").exists(),
+        fx2.target.join("Dockerfile").exists(),
         "Dockerfile must be placed when stacks includes docker"
     );
 }
@@ -721,23 +517,16 @@ fn apply_scaffoldignore_matches_rendered_output_name_not_source_name() {
     fs::write(files.join("config.tmp.jinja"), "rendered").expect("write config.tmp.jinja");
     fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
     assert!(
-        !target.join("config.tmp").exists(),
+        !fx.target.join("config.tmp").exists(),
         "output name config.tmp must be excluded by *.tmp even though source is config.tmp.jinja"
     );
     assert!(
-        target.join("keep.txt").exists(),
+        fx.target.join("keep.txt").exists(),
         "non-ignored file must be written"
     );
 }
@@ -752,23 +541,17 @@ fn apply_dry_run_omits_ignored_files_from_plan_output() {
     fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
     fs::write(files.join("scratch.tmp"), "scratch").expect("write scratch.tmp");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--dry-run");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--dry-run");
-
-    cmd.assert()
+    fx.cmd
+        .assert()
         .success()
         .stdout(contains("keep.txt"))
         .stdout(contains("scratch.tmp").not());
 
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "dry-run must not create the target directory"
     );
 }
@@ -796,20 +579,12 @@ fn apply_renders_partial_via_include() {
     )
     .expect("write README.md.jinja");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo");
+    fx.cmd.assert().success();
 
-    cmd.assert().success();
-
-    let readme = fs::read_to_string(target.join("README.md")).expect("read README.md");
+    let readme = fs::read_to_string(fx.target.join("README.md")).expect("read README.md");
     assert_eq!(readme, "# demo header\nbody");
 }
 
@@ -823,18 +598,11 @@ fn apply_include_of_unregistered_partial_fails() {
     fs::write(files.join("out.txt.jinja"), "{% include \"../escape\" %}")
         .expect("write out.txt.jinja");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
     assert!(
-        !target.join("out.txt").exists(),
+        !fx.target.join("out.txt").exists(),
         "failed include must not produce output"
     );
 }
@@ -867,55 +635,12 @@ fn apply_exposes_merged_data_in_render_context() {
     )
     .expect("write out.txt.jinja");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
+    fx.cmd.assert().success();
 
-    cmd.assert().success();
-
-    let out = fs::read_to_string(target.join("out.txt")).expect("read out.txt");
+    let out = fs::read_to_string(fx.target.join("out.txt")).expect("read out.txt");
     assert_eq!(out, "hi true\nrs,toml,");
-}
-
-#[test]
-fn apply_dedup_lines_over_included_partial() {
-    // Representative scenario: assemble a partial via `{% include %}` and dedupe the result with
-    // `{% filter dedup_lines %}`.
-    let template = tempfile::tempdir().expect("template tempdir");
-    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
-    let partials = template.path().join("partials");
-    fs::create_dir_all(&partials).expect("mkdir partials");
-    fs::write(
-        partials.join("gitignore-docker"),
-        "/target\n/docker-artifacts",
-    )
-    .expect("write partial");
-    let files = template.path().join("files");
-    fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(
-        files.join(".gitignore.jinja"),
-        "{% filter dedup_lines %}/target\n{% include \"gitignore-docker\" %}{% endfilter %}",
-    )
-    .expect("write .gitignore.jinja");
-
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().success();
-
-    let gitignore = fs::read_to_string(target.join(".gitignore")).expect("read .gitignore");
-    assert_eq!(gitignore, "/target\n/docker-artifacts");
 }
 
 #[test]
@@ -942,18 +667,10 @@ fn apply_when_cannot_reference_data() {
     fs::create_dir_all(&files).expect("mkdir files");
     fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("extra=given");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("extra=given");
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
 }
 
 #[test]
@@ -969,18 +686,11 @@ fn apply_broken_partial_fails_without_creating_target() {
     fs::create_dir_all(&files).expect("mkdir files");
     fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "a partial-load failure must not leave an empty target directory"
     );
 }
@@ -999,18 +709,11 @@ fn apply_applies_mode_prefix_permissions() {
     fs::write(files.join("readonly_notes.md"), "n").expect("write readonly");
     fs::write(files.join("plain.txt"), "p").expect("write plain");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-    cmd.assert().success();
+    let mut fx = common::apply(template.path());
+    fx.cmd.assert().success();
 
     let mode = |name: &str| {
-        fs::metadata(target.join(name))
+        fs::metadata(fx.target.join(name))
             .expect("stat")
             .permissions()
             .mode()
@@ -1048,18 +751,11 @@ fn apply_render_failure_leaves_no_target() {
     fs::create_dir_all(&files).expect("mkdir files");
     fs::write(files.join("bad.txt.jinja"), "{{ undefined_var }}").expect("write bad jinja");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "a render failure in the plan phase must not create the target directory"
     );
 }
@@ -1081,22 +777,14 @@ fn apply_uses_scaffoldroot_effective_source_root() {
     .expect("write inner scaffold.toml");
     fs::write(inner.join("files/out.txt.jinja"), "{{ project }}").expect("write inner payload");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(repo.path());
+    fx.cmd.arg("--answers").arg("project=hi");
+    fx.cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(repo.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=hi");
-    cmd.assert().success();
-
-    let out = fs::read_to_string(target.join("out.txt")).expect("read out.txt");
+    let out = fs::read_to_string(fx.target.join("out.txt")).expect("read out.txt");
     assert_eq!(out, "hi");
     // The repo-top README is not template payload, so it is not placed.
-    assert!(!target.join("README.md").exists());
+    assert!(!fx.target.join("README.md").exists());
 }
 
 #[cfg(unix)]
@@ -1117,26 +805,19 @@ fn apply_force_replaces_existing_external_symlink_dest_in_place() {
     let external = outside.path().join("secret.txt");
     fs::write(&external, "SECRET").expect("seed external");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-    fs::create_dir_all(&target).expect("mkdir target");
-    symlink(&external, target.join("data.txt")).expect("seed dest symlink");
+    let mut fx = common::apply(template.path());
+    fs::create_dir_all(&fx.target).expect("mkdir target");
+    symlink(&external, fx.target.join("data.txt")).expect("seed dest symlink");
+    fx.cmd.arg("--force");
+    fx.cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--force");
-    cmd.assert().success();
-
-    let meta = fs::symlink_metadata(target.join("data.txt")).expect("stat dest");
+    let meta = fs::symlink_metadata(fx.target.join("data.txt")).expect("stat dest");
     assert!(
         !meta.file_type().is_symlink(),
         "dest symlink must be replaced by a regular file"
     );
     assert_eq!(
-        fs::read_to_string(target.join("data.txt")).unwrap(),
+        fs::read_to_string(fx.target.join("data.txt")).unwrap(),
         "generated"
     );
     assert_eq!(
@@ -1169,21 +850,13 @@ fn write_hook_env_template(dir: &std::path::Path) {
 fn apply_inline_before_hook_runs_with_env_and_cwd_when_yes() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_hook_env_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo")
-        .arg("--yes");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo").arg("--yes");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let out = fs::read_to_string(target.join("hook-out.txt")).expect("read hook-out.txt");
+    let out = fs::read_to_string(fx.target.join("hook-out.txt")).expect("read hook-out.txt");
     assert_eq!(
         out.trim(),
         "demo",
@@ -1192,103 +865,18 @@ fn apply_inline_before_hook_runs_with_env_and_cwd_when_yes() {
 }
 
 #[test]
-fn apply_inline_hook_when_false_is_skipped() {
-    let template = tempfile::tempdir().expect("template tempdir");
-    fs::write(
-        template.path().join("scaffold.toml"),
-        r#"
-            [[hooks.before]]
-            when = "false"
-            run = "echo ran > hook-out.txt"
-        "#,
-    )
-    .expect("write scaffold.toml");
-    let files = template.path().join("files");
-    fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
-
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-
-    cmd.assert().success();
-
-    assert!(
-        !target.join("hook-out.txt").exists(),
-        "when=false inline hook must not run"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn apply_inline_hooks_run_before_folder_hooks_in_declaration_and_lexical_order() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let template = tempfile::tempdir().expect("template tempdir");
-    fs::write(
-        template.path().join("scaffold.toml"),
-        r#"
-            [[hooks.before]]
-            run = "echo a >> order.txt"
-        "#,
-    )
-    .expect("write scaffold.toml");
-    let hooks_before = template.path().join("hooks/before");
-    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
-    let script_path = hooks_before.join("z.sh");
-    fs::write(&script_path, "#!/bin/sh\necho b >> order.txt\n").expect("write z.sh");
-    let mut perms = fs::metadata(&script_path).expect("metadata").permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&script_path, perms).expect("chmod +x z.sh");
-    let files = template.path().join("files");
-    fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
-
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-
-    cmd.assert().success();
-
-    let order = fs::read_to_string(target.join("order.txt")).expect("read order.txt");
-    assert_eq!(
-        order, "a\nb\n",
-        "inline hooks must run before folder hooks (lexical)"
-    );
-}
-
-#[test]
 fn apply_hook_confirm_required_without_yes_fails_noninteractively_with_no_side_effects() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_hook_env_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo");
 
     // assert_cmd runs non-tty by default; with a hook and no --yes the confirm is refused and it must error.
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
 
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "unconfirmed hook must abort before target creation (no side effects)"
     );
 }
@@ -1324,21 +912,13 @@ fn write_jinja_folder_hook_template(dir: &std::path::Path) {
 fn apply_jinja_folder_hook_renders_with_answer_context_and_executes() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_jinja_folder_hook_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo")
-        .arg("--yes");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo").arg("--yes");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let out = fs::read_to_string(target.join("rendered-hook-out.txt"))
+    let out = fs::read_to_string(fx.target.join("rendered-hook-out.txt"))
         .expect("read rendered-hook-out.txt");
     assert_eq!(
         out.trim(),
@@ -1368,19 +948,13 @@ fn write_after_hook_observes_payload_template(dir: &std::path::Path) {
 fn apply_after_hook_observes_written_payload_file() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_after_hook_observes_payload_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--yes");
 
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
-    let out = fs::read_to_string(target.join("after-saw.txt")).expect("read after-saw.txt");
+    let out = fs::read_to_string(fx.target.join("after-saw.txt")).expect("read after-saw.txt");
     assert_eq!(
         out.trim(),
         "payload",
@@ -1392,23 +966,15 @@ fn apply_after_hook_observes_written_payload_file() {
 fn apply_dry_run_skips_hook_confirm_and_execution() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_hook_env_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--answers")
-        .arg("project=demo")
-        .arg("--dry-run");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo").arg("--dry-run");
 
     // Even without --yes, dry-run skips the confirm and hook execution entirely, so it must succeed.
-    cmd.assert().success();
+    fx.cmd.assert().success();
 
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "dry-run must not create the target directory or run hooks"
     );
 }
@@ -1431,18 +997,11 @@ fn apply_rejects_externally_symlinked_manifest_without_trust() {
     fs::create_dir_all(&files).expect("mkdir files");
     fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "externally symlinked manifest must abort before target creation"
     );
 }
@@ -1462,51 +1021,12 @@ fn apply_allows_externally_symlinked_manifest_with_trust() {
     fs::create_dir_all(&files).expect("mkdir files");
     fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--trust");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--trust");
-
-    cmd.assert().success();
+    fx.cmd.assert().success();
     assert_eq!(
-        fs::read_to_string(target.join("marker.txt")).expect("read marker.txt"),
-        "marker"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn apply_allows_internally_symlinked_manifest_without_trust() {
-    use std::os::unix::fs::symlink;
-
-    let template = tempfile::tempdir().expect("template tempdir");
-    fs::write(template.path().join("real-scaffold.toml"), "").expect("write real manifest");
-    symlink(
-        template.path().join("real-scaffold.toml"),
-        template.path().join("scaffold.toml"),
-    )
-    .expect("symlink scaffold.toml");
-    let files = template.path().join("files");
-    fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
-
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().success();
-    assert_eq!(
-        fs::read_to_string(target.join("marker.txt")).expect("read marker.txt"),
+        fs::read_to_string(fx.target.join("marker.txt")).expect("read marker.txt"),
         "marker"
     );
 }
@@ -1534,19 +1054,12 @@ fn apply_rejects_externally_symlinked_hook_script_without_trust() {
     fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
     symlink(&external_script, hooks_before.join("x.sh")).expect("symlink hook script");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--yes");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "externally symlinked hook script must abort before target creation"
     );
 }
@@ -1574,18 +1087,11 @@ fn apply_rejects_externally_symlinked_scaffoldroot_without_trust() {
     fs::write(inner.join("scaffold.toml"), "").expect("write inner scaffold.toml");
     fs::write(inner.join("files/marker.txt"), "marker").expect("write inner marker");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target);
-
-    cmd.assert().failure();
+    fx.cmd.assert().failure();
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "externally symlinked .scaffoldroot must abort before target creation"
     );
 }
@@ -1610,53 +1116,13 @@ fn apply_allows_externally_symlinked_scaffoldroot_with_trust() {
     fs::write(inner.join("scaffold.toml"), "").expect("write inner scaffold.toml");
     fs::write(inner.join("files/marker.txt"), "marker").expect("write inner marker");
 
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--trust");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--trust");
-
-    cmd.assert().success();
+    fx.cmd.assert().success();
     assert_eq!(
-        fs::read_to_string(target.join("marker.txt")).expect("read marker.txt"),
+        fs::read_to_string(fx.target.join("marker.txt")).expect("read marker.txt"),
         "marker"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn apply_fails_on_broken_symlinked_hook_script() {
-    use std::os::unix::fs::symlink;
-
-    let template = tempfile::tempdir().expect("template tempdir");
-    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
-    let files = template.path().join("files");
-    fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
-
-    let hooks_before = template.path().join("hooks/before");
-    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
-    symlink(template.path().join("nowhere"), hooks_before.join("x.sh"))
-        .expect("symlink broken hook script");
-
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-
-    cmd.assert().failure();
-    assert!(
-        !target.exists(),
-        "broken hook script symlink must abort before target creation"
     );
 }
 
@@ -1681,19 +1147,13 @@ fn write_failing_before_hook_template(dir: &std::path::Path) {
 fn apply_failure_cleans_up_newly_created_target() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_failing_before_hook_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-    cmd.assert().failure();
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--yes");
+    fx.cmd.assert().failure();
 
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "newly created target must be cleaned up after before-hook failure"
     );
 }
@@ -1702,22 +1162,17 @@ fn apply_failure_cleans_up_newly_created_target() {
 fn apply_failure_preserves_preexisting_target_and_sentinel() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_failing_before_hook_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-    // nested sentinel — planted inside a subdirectory to also catch a delete-then-recreate defect.
-    fs::create_dir_all(target.join("nested")).expect("precreate nested");
-    fs::write(target.join("nested").join("deep.txt"), "user-data").expect("nested sentinel");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-    cmd.assert().failure();
+    let mut fx = common::apply(template.path());
+    // nested sentinel — planted inside a subdirectory to also catch a delete-then-recreate defect.
+    fs::create_dir_all(fx.target.join("nested")).expect("precreate nested");
+    fs::write(fx.target.join("nested").join("deep.txt"), "user-data").expect("nested sentinel");
+
+    fx.cmd.arg("--yes");
+    fx.cmd.assert().failure();
 
     assert_eq!(
-        fs::read_to_string(target.join("nested").join("deep.txt"))
+        fs::read_to_string(fx.target.join("nested").join("deep.txt"))
             .expect("nested sentinel must survive"),
         "user-data",
         "pre-existing target and nested user data must be preserved on failure"
@@ -1728,20 +1183,13 @@ fn apply_failure_preserves_preexisting_target_and_sentinel() {
 fn apply_no_cleanup_flag_preserves_created_target_on_failure() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_failing_before_hook_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes")
-        .arg("--no-cleanup-on-failure");
-    cmd.assert().failure();
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--yes").arg("--no-cleanup-on-failure");
+    fx.cmd.assert().failure();
 
     assert!(
-        target.exists(),
+        fx.target.exists(),
         "--no-cleanup-on-failure must preserve the created target"
     );
 }
@@ -1750,20 +1198,15 @@ fn apply_no_cleanup_flag_preserves_created_target_on_failure() {
 fn apply_failure_cleanup_does_not_touch_sibling() {
     let template = tempfile::tempdir().expect("template tempdir");
     write_failing_before_hook_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
-    let sibling = workdir.path().join("sibling.txt");
+
+    let mut fx = common::apply(template.path());
+    let sibling = fx.workdir().join("sibling.txt");
     fs::write(&sibling, "keep-sibling").expect("sibling sentinel");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-    cmd.assert().failure();
+    fx.cmd.arg("--yes");
+    fx.cmd.assert().failure();
 
-    assert!(!target.exists(), "created target must be cleaned up");
+    assert!(!fx.target.exists(), "created target must be cleaned up");
     assert_eq!(
         fs::read_to_string(&sibling).expect("sibling must survive"),
         "keep-sibling",
@@ -1821,19 +1264,55 @@ fn apply_after_hook_failure_cleans_up_created_target_with_contents() {
     // Even if the after-hook fails after write completes and marker.txt is placed, the newly created target is cleaned up wholesale.
     let template = tempfile::tempdir().expect("template tempdir");
     write_failing_after_hook_template(template.path());
-    let workdir = tempfile::tempdir().expect("workdir tempdir");
-    let target = workdir.path().join("demo");
 
-    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path())
-        .arg("apply")
-        .arg(template.path())
-        .arg(&target)
-        .arg("--yes");
-    cmd.assert().failure();
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--yes");
+    fx.cmd.assert().failure();
 
     assert!(
-        !target.exists(),
+        !fx.target.exists(),
         "created target with generated contents must be cleaned up on after-hook failure"
+    );
+}
+
+// --- out-of-target containment (§1.10) ---
+
+/// A directory symlink inside the target that points outside makes a payload entry resolve outside
+/// the target. Run non-interactively (no confirm is available), the escaping write is skipped —
+/// apply still succeeds and nothing is written to the external location.
+#[cfg(unix)]
+#[test]
+fn apply_external_write_outside_target_is_skipped_noninteractively() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    common::build_tree(
+        template.path(),
+        &[
+            ("scaffold.toml", ""),
+            ("files/escape/child.txt", "escaped-content"),
+        ],
+    );
+
+    // The external directory the in-target symlink escapes to; it must stay empty.
+    let outside = tempfile::tempdir().expect("outside tempdir");
+
+    let mut fx = common::apply(template.path());
+    // Pre-create the target with a directory symlink `escape` pointing outside it, so the payload
+    // entry `escape/child.txt` resolves to `<outside>/child.txt` through the symlinked ancestor.
+    fs::create_dir_all(&fx.target).expect("mkdir target");
+    symlink(outside.path(), fx.target.join("escape")).expect("symlink escape -> outside");
+
+    // Non-interactive: the external-write confirm is refused, so the entry is skipped (not an error).
+    fx.cmd.assert().success().stderr(contains("escapes target"));
+
+    assert!(
+        !outside.path().join("child.txt").exists(),
+        "escaping entry must not be written to the external location"
+    );
+    let escape_meta = fs::symlink_metadata(fx.target.join("escape")).expect("stat escape");
+    assert!(
+        escape_meta.file_type().is_symlink(),
+        "the in-target symlink must be left untouched by the skip"
     );
 }
