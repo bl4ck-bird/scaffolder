@@ -172,6 +172,28 @@ scaffolder template validate [names...] [--template-dir <path>]
   every template in the store; problems are reported grouped by kind and
   the command exits non-zero.
 
+## Development
+
+Git hooks are managed with [lefthook](https://github.com/evilmartians/lefthook).
+After cloning, install the hook manager and the tools the hooks invoke, then
+wire them into the repo:
+
+```sh
+brew install lefthook typos-cli      # see each tool's docs for other package managers
+rustup component add rustfmt clippy  # usually already present with the toolchain
+lefthook install
+```
+
+The hooks then run automatically:
+
+- **pre-commit** — `cargo fmt`, `cargo clippy`, and
+  [`typos`](https://github.com/crate-ci/typos).
+- **pre-push** — the full `cargo test` suite.
+
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (advisories, licenses,
+bans, sources) runs in CI rather than a hook; to run it locally:
+`cargo install cargo-deny && cargo deny check`.
+
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or
