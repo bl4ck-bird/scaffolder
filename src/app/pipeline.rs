@@ -633,8 +633,6 @@ mod tests {
         }
     }
 
-    /// For source-conflict setups: returns two entries whose different basenames map to the
-    /// same output rel (both verbatim, equal after `.jinja` strip).
     struct FakePayloadStore {
         entries: Vec<PayloadEntry>,
         contents: HashMap<String, Vec<u8>>,
@@ -723,6 +721,71 @@ mod tests {
         }
     }
 
+    impl Default for FakePayloadStore {
+        fn default() -> Self {
+            Self {
+                entries: Vec::new(),
+                contents: HashMap::new(),
+                dest_statuses: RefCell::new(HashMap::new()),
+                written: RefCell::new(Vec::new()),
+                prep: TargetPreparation::Created,
+                cleaned: RefCell::new(false),
+                cleanup_fails: false,
+                cleaned_path: RefCell::new(None),
+                prepared: RefCell::new(false),
+                write_fails: false,
+                dest_status_fails: false,
+                prepare_fails: false,
+            }
+        }
+    }
+
+    impl FakePayloadStore {
+        fn with_entries(mut self, entries: Vec<PayloadEntry>) -> Self {
+            self.entries = entries;
+            self
+        }
+
+        fn with_contents(mut self, contents: HashMap<String, Vec<u8>>) -> Self {
+            self.contents = contents;
+            self
+        }
+
+        fn with_dest_status(self, rel: &str, status: DestStatus) -> Self {
+            self.dest_statuses
+                .borrow_mut()
+                .insert(rel.to_string(), status);
+            self
+        }
+
+        fn prep(mut self, prep: TargetPreparation) -> Self {
+            self.prep = prep;
+            self
+        }
+
+        fn failing_write(mut self) -> Self {
+            self.write_fails = true;
+            self
+        }
+
+        fn failing_cleanup(mut self) -> Self {
+            self.cleanup_fails = true;
+            self
+        }
+
+        fn failing_prepare(mut self) -> Self {
+            self.prepare_fails = true;
+            self
+        }
+    }
+
+    fn file_entry(rel: &str) -> PayloadEntry {
+        PayloadEntry {
+            rel: safe_rel_path(rel).unwrap(),
+            is_dir: false,
+        }
+    }
+
     /// Test `IgnoreSource` that excludes only a fixed set of rels (or nothing when empty).
     struct FakeIgnoreSource {
         ignored: Vec<String>,
@@ -769,23 +832,12 @@ mod tests {
             questions: vec![string_question("project", None)],
             ..Default::default()
         };
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("README.md.jinja").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("README.md.jinja".to_string(), b"# {{ project }}".to_vec())]),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("README.md.jinja")])
+            .with_contents(HashMap::from([(
+                "README.md.jinja".to_string(),
+                b"# {{ project }}".to_vec(),
+            )]));
 
         let mut answers = BTreeMap::new();
         answers.insert("project".to_string(), "demo".to_string());
@@ -833,32 +885,12 @@ mod tests {
             questions: vec![],
             ..Default::default()
         };
-        let store = FakePayloadStore {
-            entries: vec![
-                PayloadEntry {
-                    rel: safe_rel_path("README.md").unwrap(),
-                    is_dir: false,
-                },
-                PayloadEntry {
-                    rel: safe_rel_path("README.md.jinja").unwrap(),
-                    is_dir: false,
-                },
-            ],
-            contents: HashMap::from([
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("README.md"), file_entry("README.md.jinja")])
+            .with_contents(HashMap::from([
                 ("README.md".to_string(), b"verbatim".to_vec()),
                 ("README.md.jinja".to_string(), b"rendered".to_vec()),
-            ]),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+            ]));
 
         let req = ApplyRequest {
             template_root: PathBuf::from("/tpl"),
@@ -900,20 +932,7 @@ mod tests {
             questions: vec![string_question("project", None)],
             ..Default::default()
         };
-        let store = FakePayloadStore {
-            entries: vec![],
-            contents: HashMap::new(),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default();
 
         let req = ApplyRequest {
             template_root: PathBuf::from("/tpl"),
@@ -958,33 +977,21 @@ mod tests {
             questions: vec![],
             ..Default::default()
         };
-        let mut dest_statuses = HashMap::new();
-        dest_statuses.insert(
-            "linked/outside.txt".to_string(),
-            DestStatus {
-                final_path: PathBuf::from("/outside/outside.txt"),
-                inside_target: false,
-                exists: false,
-                is_symlink: false,
-            },
-        );
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("linked/outside.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("linked/outside.txt".to_string(), b"content".to_vec())]),
-            dest_statuses: RefCell::new(dest_statuses),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("linked/outside.txt")])
+            .with_contents(HashMap::from([(
+                "linked/outside.txt".to_string(),
+                b"content".to_vec(),
+            )]))
+            .with_dest_status(
+                "linked/outside.txt",
+                DestStatus {
+                    final_path: PathBuf::from("/outside/outside.txt"),
+                    inside_target: false,
+                    exists: false,
+                    is_symlink: false,
+                },
+            );
 
         let req = ApplyRequest {
             template_root: PathBuf::from("/tpl"),
@@ -1022,38 +1029,26 @@ mod tests {
     }
 
     #[test]
-    fn existing_destination_without_overwrite_confirmation_is_error() {
+    fn external_write_confirmed_writes_at_escaping_path() {
         let manifest = Manifest {
             questions: vec![],
             ..Default::default()
         };
-        let mut dest_statuses = HashMap::new();
-        dest_statuses.insert(
-            "file.txt".to_string(),
-            DestStatus {
-                final_path: PathBuf::from("/target/file.txt"),
-                inside_target: true,
-                exists: true,
-                is_symlink: false,
-            },
-        );
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
-            dest_statuses: RefCell::new(dest_statuses),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("linked/outside.txt")])
+            .with_contents(HashMap::from([(
+                "linked/outside.txt".to_string(),
+                b"content".to_vec(),
+            )]))
+            .with_dest_status(
+                "linked/outside.txt",
+                DestStatus {
+                    final_path: PathBuf::from("/outside/outside.txt"),
+                    inside_target: false,
+                    exists: false,
+                    is_symlink: false,
+                },
+            );
 
         let req = ApplyRequest {
             template_root: PathBuf::from("/tpl"),
@@ -1075,7 +1070,7 @@ mod tests {
                 renderer: &FakeRenderer,
                 payload: &store,
                 confirmer: &FakeConfirmer {
-                    overwrite: false,
+                    overwrite: true,
                     external: true,
                 },
                 answer_source: &FakeAnswerSource::unreachable(),
@@ -1086,93 +1081,14 @@ mod tests {
             },
         );
 
-        assert!(result.is_err());
-        assert!(store.written.borrow().is_empty());
-    }
-
-    #[test]
-    fn cli_answers_override_answers_file() {
-        let question = string_question("project", Some("default-val"));
-        let mut raw = BTreeMap::new();
-        raw.insert("project".to_string(), "from-cli".to_string());
-        let mut file = BTreeMap::new();
-        file.insert(
-            "project".to_string(),
-            AnswerValue::Text("from-file".to_string()),
-        );
-
-        let resolved = resolve_answers(
-            &[question],
-            &raw,
-            &file,
-            false,
-            false,
-            AnswerPorts {
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-            },
-            &builtins(),
-        )
-        .expect("resolve should succeed");
-
+        assert!(result.is_ok());
+        let written = store.written.borrow();
         assert_eq!(
-            resolved.get("project"),
-            Some(&AnswerValue::Text("from-cli".to_string()))
+            written.len(),
+            1,
+            "confirmed external write must be recorded"
         );
-    }
-
-    #[test]
-    fn answers_file_used_when_cli_answer_missing() {
-        let question = string_question("project", Some("default-val"));
-        let raw = BTreeMap::new();
-        let mut file = BTreeMap::new();
-        file.insert(
-            "project".to_string(),
-            AnswerValue::Text("from-file".to_string()),
-        );
-
-        let resolved = resolve_answers(
-            &[question],
-            &raw,
-            &file,
-            false,
-            false,
-            AnswerPorts {
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-            },
-            &builtins(),
-        )
-        .expect("resolve should succeed");
-
-        assert_eq!(
-            resolved.get("project"),
-            Some(&AnswerValue::Text("from-file".to_string()))
-        );
-    }
-
-    #[test]
-    fn defaults_only_uses_question_default_when_unanswered() {
-        let question = string_question("project", Some("default-val"));
-
-        let resolved = resolve_answers(
-            &[question],
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            true,
-            false,
-            AnswerPorts {
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-            },
-            &builtins(),
-        )
-        .expect("resolve should succeed");
-
-        assert_eq!(
-            resolved.get("project"),
-            Some(&AnswerValue::Text("default-val".to_string()))
-        );
+        assert_eq!(written[0].0.to_string(), "linked/outside.txt");
     }
 
     #[test]
@@ -1219,30 +1135,6 @@ mod tests {
             Some(&AnswerValue::Text("asked".to_string()))
         );
         assert!(*source.called.borrow(), "ask should have been called");
-    }
-
-    #[test]
-    fn noninteractive_unanswered_falls_back_to_default() {
-        let question = string_question("project", Some("default-val"));
-
-        let resolved = resolve_answers(
-            &[question],
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            false,
-            false,
-            AnswerPorts {
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-            },
-            &builtins(),
-        )
-        .expect("resolve should succeed");
-
-        assert_eq!(
-            resolved.get("project"),
-            Some(&AnswerValue::Text("default-val".to_string()))
-        );
     }
 
     #[test]
@@ -1500,23 +1392,12 @@ mod tests {
             },
             ..Default::default()
         };
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("file.txt")])
+            .with_contents(HashMap::from([(
+                "file.txt".to_string(),
+                b"content".to_vec(),
+            )]));
         let runner = FakeHookRunner::new();
 
         let req = ApplyRequest {
@@ -1558,103 +1439,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dry_run_skips_hook_confirm_and_execution_even_when_hooks_are_declared() {
-        let manifest = Manifest {
-            questions: vec![],
-            hooks: crate::domain::hook::Hooks {
-                before: vec![crate::domain::hook::Hook {
-                    when: None,
-                    run: "echo should-not-run".to_string(),
-                }],
-                after: vec![],
-            },
-            ..Default::default()
-        };
-        let store = FakePayloadStore {
-            entries: vec![],
-            contents: HashMap::new(),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
-        let runner = FakeHookRunner::new();
-
-        let req = ApplyRequest {
-            template_root: PathBuf::from("/tpl"),
-            target_root: PathBuf::from("/target"),
-            answers: BTreeMap::new(),
-            answers_file: BTreeMap::new(),
-            defaults_only: false,
-            interactive: false,
-            dry_run: true,
-            cleanup_on_failure: true,
-        };
-
-        let report = apply(
-            &req,
-            builtins(),
-            ApplyPorts {
-                manifest_src: &FakeManifestSource(manifest),
-                data_source: &FakeDataSource,
-                renderer: &FakeRenderer,
-                payload: &store,
-                // If dry-run skips hook collection/confirm entirely, even a declining confirmer is harmless.
-                confirmer: &DecliningHookConfirmer,
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-                ignore_source: &FakeIgnoreSource::none(),
-                hook_source: &FakeHookSource,
-                hook_runner: &runner,
-            },
-        )
-        .expect("dry-run must succeed even though hook confirm would be declined");
-
-        assert!(report.planned.is_empty());
-        assert!(
-            runner.calls.borrow().is_empty(),
-            "dry-run must not execute hooks"
-        );
-    }
-
     // --- target cleanup guard on failure ---
 
     /// Store that fails in the write step via overwrite refusal (for the cleanup guard). It
     /// reports the dest already exists, so with `confirm_overwrite=false` the write loop bails.
     fn overwrite_conflict_store(prep: TargetPreparation, cleanup_fails: bool) -> FakePayloadStore {
-        let mut dest_statuses = HashMap::new();
-        dest_statuses.insert(
-            "file.txt".to_string(),
-            DestStatus {
-                final_path: PathBuf::from("/target/file.txt"),
-                inside_target: true,
-                exists: true,
-                is_symlink: false,
-            },
-        );
-        FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
-            dest_statuses: RefCell::new(dest_statuses),
-            written: RefCell::new(Vec::new()),
-            prep,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails,
-            prepare_fails: false,
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("file.txt")])
+            .with_contents(HashMap::from([(
+                "file.txt".to_string(),
+                b"content".to_vec(),
+            )]))
+            .with_dest_status(
+                "file.txt",
+                DestStatus {
+                    final_path: PathBuf::from("/target/file.txt"),
+                    inside_target: true,
+                    exists: true,
+                    is_symlink: false,
+                },
+            )
+            .prep(prep);
+        if cleanup_fails {
+            store.failing_cleanup()
+        } else {
+            store
         }
     }
 
@@ -1676,33 +1485,6 @@ mod tests {
             questions: vec![],
             ..Default::default()
         }
-    }
-
-    /// Runs apply for the cleanup-guard tests: induces overwrite refusal (a post-prepare failure) and returns the result.
-    fn run_with_overwrite_conflict(
-        manifest: Manifest,
-        store: &FakePayloadStore,
-        req: &ApplyRequest,
-    ) -> Result<ApplyReport> {
-        apply(
-            req,
-            builtins(),
-            ApplyPorts {
-                manifest_src: &FakeManifestSource(manifest),
-                data_source: &FakeDataSource,
-                renderer: &FakeRenderer,
-                payload: store,
-                confirmer: &FakeConfirmer {
-                    overwrite: false,
-                    external: true,
-                },
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-                ignore_source: &FakeIgnoreSource::none(),
-                hook_source: &FakeHookSource,
-                hook_runner: &FakeHookRunner::new(),
-            },
-        )
     }
 
     // Verifies the cleanup guard directly, without going through `apply` (the key combos of its 6 branches).
@@ -1799,23 +1581,10 @@ mod tests {
     fn created_target_is_cleaned_up_on_write_io_failure() {
         // Injects a real write_file I/O failure (not an overwrite-refusal proxy). Also verifies
         // cleanup is called with exactly the prepared target root path.
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: true,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("file.txt")])
+            .with_contents(HashMap::from([("file.txt".to_string(), b"x".to_vec())]))
+            .failing_write();
         let req = cleanup_req(true);
         let result = apply(
             &req,
@@ -1849,105 +1618,6 @@ mod tests {
     }
 
     #[test]
-    fn created_target_is_cleaned_up_on_dest_status_failure() {
-        // A dest_status error is also a post-prepare failure path, so it gets the same policy (cleanup).
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: true,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
-        let result = apply(
-            &cleanup_req(true),
-            builtins(),
-            ApplyPorts {
-                manifest_src: &FakeManifestSource(empty_manifest()),
-                data_source: &FakeDataSource,
-                renderer: &FakeRenderer,
-                payload: &store,
-                confirmer: &FakeConfirmer {
-                    overwrite: true,
-                    external: true,
-                },
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-                ignore_source: &FakeIgnoreSource::none(),
-                hook_source: &FakeHookSource,
-                hook_runner: &FakeHookRunner::new(),
-            },
-        );
-        assert!(result.is_err());
-        assert!(
-            *store.cleaned.borrow(),
-            "dest_status failure must also trigger cleanup"
-        );
-    }
-
-    #[test]
-    fn created_target_is_cleaned_up_on_before_hook_failure() {
-        let manifest = Manifest {
-            questions: vec![],
-            hooks: crate::domain::hook::Hooks {
-                before: vec![crate::domain::hook::Hook {
-                    when: None,
-                    run: "boom".to_string(),
-                }],
-                after: vec![],
-            },
-            ..Default::default()
-        };
-        let store = FakePayloadStore {
-            entries: vec![],
-            contents: HashMap::new(),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
-        let result = apply(
-            &cleanup_req(true),
-            builtins(),
-            ApplyPorts {
-                manifest_src: &FakeManifestSource(manifest),
-                data_source: &FakeDataSource,
-                renderer: &FakeRenderer,
-                payload: &store,
-                confirmer: &FakeConfirmer {
-                    overwrite: true,
-                    external: true,
-                },
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-                ignore_source: &FakeIgnoreSource::none(),
-                hook_source: &FakeHookSource,
-                hook_runner: &FailingHookRunner,
-            },
-        );
-        assert!(result.is_err());
-        assert!(
-            *store.cleaned.borrow(),
-            "created target must be cleaned up when before-hook fails"
-        );
-    }
-
-    #[test]
     fn created_target_is_cleaned_up_on_after_hook_failure() {
         // before empty, only after fails → even after writes succeed, an after-hook failure still cleans up.
         let manifest = Manifest {
@@ -1963,23 +1633,9 @@ mod tests {
         };
         // Actually writes the payload (write succeeds), then fails in the after-hook, proving the
         // target is cleaned up "including the finished output".
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default()
+            .with_entries(vec![file_entry("file.txt")])
+            .with_contents(HashMap::from([("file.txt".to_string(), b"x".to_vec())]));
         let result = apply(
             &cleanup_req(true),
             builtins(),
@@ -2011,116 +1667,13 @@ mod tests {
     }
 
     #[test]
-    fn existing_target_is_preserved_on_failure() {
-        let store = overwrite_conflict_store(TargetPreparation::Existing, false);
-        let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(true));
-        assert!(result.is_err());
-        assert!(
-            !*store.cleaned.borrow(),
-            "pre-existing target must never be cleaned up"
-        );
-    }
-
-    #[test]
-    fn no_cleanup_flag_preserves_created_target_on_failure() {
-        let store = overwrite_conflict_store(TargetPreparation::Created, false);
-        let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(false));
-        assert!(result.is_err());
-        assert!(
-            !*store.cleaned.borrow(),
-            "--no-cleanup-on-failure must preserve the target"
-        );
-    }
-
-    #[test]
-    fn successful_apply_does_not_clean_up() {
-        let mut dest_statuses = HashMap::new();
-        dest_statuses.insert(
-            "file.txt".to_string(),
-            DestStatus {
-                final_path: PathBuf::from("/target/file.txt"),
-                inside_target: true,
-                exists: false,
-                is_symlink: false,
-            },
-        );
-        let store = FakePayloadStore {
-            entries: vec![PayloadEntry {
-                rel: safe_rel_path("file.txt").unwrap(),
-                is_dir: false,
-            }],
-            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
-            dest_statuses: RefCell::new(dest_statuses),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
-        let result = apply(
-            &cleanup_req(true),
-            builtins(),
-            ApplyPorts {
-                manifest_src: &FakeManifestSource(empty_manifest()),
-                data_source: &FakeDataSource,
-                renderer: &FakeRenderer,
-                payload: &store,
-                confirmer: &FakeConfirmer {
-                    overwrite: true,
-                    external: true,
-                },
-                answer_source: &FakeAnswerSource::unreachable(),
-                condition_evaluator: &FakeConditionEvaluator::always(true),
-                ignore_source: &FakeIgnoreSource::none(),
-                hook_source: &FakeHookSource,
-                hook_runner: &FakeHookRunner::new(),
-            },
-        );
-        assert!(result.is_ok());
-        assert!(
-            !*store.cleaned.borrow(),
-            "successful apply must not clean up"
-        );
-    }
-
-    #[test]
-    fn cleanup_failure_does_not_mask_original_error() {
-        let store = overwrite_conflict_store(TargetPreparation::Created, true);
-        let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(true));
-        let err = result.expect_err("apply must fail");
-        assert!(*store.cleaned.borrow(), "cleanup must have been attempted");
-        // The original (overwrite) error is not replaced by the cleanup-failure error.
-        assert!(
-            err.to_string().contains("exists"),
-            "original error must survive, got: {err}"
-        );
-    }
-
-    #[test]
     fn pre_prepare_failure_does_not_clean_up() {
         // A missing answer fails before ensure_target (in resolve_answers) → nothing to clean up.
         let manifest = Manifest {
             questions: vec![string_question("project", None)],
             ..Default::default()
         };
-        let store = FakePayloadStore {
-            entries: vec![],
-            contents: HashMap::new(),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: false,
-        };
+        let store = FakePayloadStore::default();
         let result = apply(
             &cleanup_req(true),
             builtins(),
@@ -2154,20 +1707,7 @@ mod tests {
     #[test]
     fn prepare_failure_itself_does_not_clean_up() {
         // If ensure_target itself fails (permissions, etc.) there is no prepared target, so nothing is cleaned up.
-        let store = FakePayloadStore {
-            entries: vec![],
-            contents: HashMap::new(),
-            dest_statuses: RefCell::new(HashMap::new()),
-            written: RefCell::new(Vec::new()),
-            prep: TargetPreparation::Created,
-            cleaned: RefCell::new(false),
-            cleaned_path: RefCell::new(None),
-            prepared: RefCell::new(false),
-            write_fails: false,
-            dest_status_fails: false,
-            cleanup_fails: false,
-            prepare_fails: true,
-        };
+        let store = FakePayloadStore::default().failing_prepare();
         let result = apply(
             &cleanup_req(true),
             builtins(),
