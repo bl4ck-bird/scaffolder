@@ -1,13 +1,14 @@
-//! 훅·overwrite·외부쓰기 confirm 게이트 — `Confirmer`.
+//! Confirmation gates for hooks, overwrites, and external writes — `Confirmer`.
 
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use crate::domain::hook::Confirmer;
 
-/// tty 프롬프트 기반 `Confirmer`. `force`는 overwrite 전용 게이트다 — 대화형일 때만
-/// 프롬프트하고 비대화형은 거부한다(미승인 write는 에러로 이어져야 하는 보안 표면).
-/// `yes`는 훅 confirm 전용 우회다 — overwrite/외부쓰기에는 관여하지 않는다.
+/// tty-prompt-based `Confirmer`. `force` is an overwrite-only gate — it prompts only
+/// when interactive and refuses when non-interactive (an unapproved write is a security
+/// surface that must become an error). `yes` bypasses hook confirmation only — it plays
+/// no part in overwrite or external-write decisions.
 pub struct StdConfirmer {
     pub force: bool,
     pub interactive: bool,
@@ -23,7 +24,8 @@ impl StdConfirmer {
         }
     }
 
-    /// 비대화형은 거부, 대화형은 tty y/N. `force`를 참조하지 않는다 — 호출부에서 필요하면 먼저 확인한다.
+    /// Refuses when non-interactive; prompts tty y/N when interactive. Does not consult
+    /// `force` — the caller checks it first when needed.
     fn tty_prompt(&self, message: &str) -> bool {
         if !self.interactive {
             return false;
@@ -59,7 +61,8 @@ impl Confirmer for StdConfirmer {
     }
 
     fn confirm_external_write(&self, path: &Path) -> bool {
-        // containment 이탈은 `--force`(overwrite 전용)로 우회 불가 — 항상 tty 승인이 필요하다.
+        // Escaping containment cannot be bypassed by `--force` (overwrite-only) — it
+        // always requires tty approval.
         self.tty_prompt(&format!("write outside target at {}?", path.display()))
     }
 }

@@ -1,4 +1,4 @@
-//! `inquire` 타입별 위젯 — `AnswerSource`.
+//! Per-type `inquire` widgets — `AnswerSource`.
 
 use anyhow::{Context, Result, anyhow, bail};
 use inquire::{Confirm, MultiSelect, Select, Text};
@@ -6,7 +6,7 @@ use inquire::{Confirm, MultiSelect, Select, Text};
 use crate::domain::answer::{AnswerSource, AnswerValue, coerce, validate_choice};
 use crate::domain::question::{Question, QuestionType};
 
-/// tty 대화형 `AnswerSource`. 취소·입력 에러는 anyhow context와 함께 전파한다.
+/// Interactive tty `AnswerSource`. Cancellations and input errors propagate with anyhow context.
 pub struct InquireAnswerSource;
 
 impl AnswerSource for InquireAnswerSource {
@@ -42,8 +42,8 @@ fn ask_string(question: &Question) -> Result<AnswerValue> {
     Ok(AnswerValue::Text(raw))
 }
 
-/// int/float는 텍스트로 입력받아 `coerce`로 재파싱한다 — `--answers` 경로와 파싱 로직을
-/// 하나로 유지하기 위함.
+/// int/float are taken as text and re-parsed with `coerce`, keeping the parsing logic
+/// unified with the `--answers` path.
 fn ask_numeric(question: &Question) -> Result<AnswerValue> {
     let message = prompt_message(question);
     let mut text = Text::new(&message);
@@ -118,7 +118,7 @@ fn choice_labels(question: &Question) -> Vec<String> {
     question.choices.iter().map(|c| c.label.clone()).collect()
 }
 
-/// 선택된 인덱스(inquire label 목록 기준) → 원래 choice의 리터럴 값.
+/// Selected index (into the inquire label list) → the original choice's literal value.
 fn resolve_choice_value(question: &Question, index: usize) -> Result<AnswerValue> {
     question
         .choices
@@ -137,7 +137,7 @@ fn resolve_choice_string(question: &Question, index: usize) -> Result<String> {
     choice_value_to_string(&value)
 }
 
-/// multiselect의 `List` 항목은 문자열이다 — choice 값을 정규 문자열로 낮춘다.
+/// multiselect `List` items are strings — lower a choice value to its canonical string.
 fn choice_value_to_string(value: &AnswerValue) -> Result<String> {
     match value {
         AnswerValue::Text(s) => Ok(s.clone()),

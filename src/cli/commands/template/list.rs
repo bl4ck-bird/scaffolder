@@ -1,4 +1,4 @@
-//! `template list`.
+//! The `template list` command.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,8 +11,11 @@ use crate::infra::load::store::FsTemplateStore;
 
 #[derive(Debug, Args)]
 pub struct ListArgs {
-    /// 스토어 조회 시 `$SCAFFOLDER_HOME`/`~/.scaffolder`보다 우선하는 디렉토리.
-    #[arg(long = "template-dir", value_name = "PATH")]
+    #[arg(
+        long = "template-dir",
+        value_name = "PATH",
+        help = "Directory searched before $SCAFFOLDER_HOME/~/.scaffolder when resolving a store name."
+    )]
     pub template_dir: Option<PathBuf>,
 }
 
@@ -23,7 +26,8 @@ pub fn run(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-/// name 기준 정렬 출력. 여러 base에 동명 템플릿이 있으면 base 경로를 힌트로 병기해 구분한다.
+/// Prints listings sorted by name. When the same name exists in several bases,
+/// each occurrence is annotated with its base path to tell them apart.
 fn format_listings(listings: &[TemplateListing]) -> String {
     if listings.is_empty() {
         return "No templates found.".to_string();

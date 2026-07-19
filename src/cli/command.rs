@@ -1,4 +1,4 @@
-//! 루트 `Cli`(clap Parser)와 top-level 디스패치.
+//! Root `Cli` (clap `Parser`) and top-level dispatch.
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -9,7 +9,11 @@ use crate::cli::commands::template::new::{self, NewArgs};
 use crate::cli::commands::template::validate::{self, ValidateArgs};
 
 #[derive(Debug, Parser)]
-#[command(name = "scaffolder", version, about = "선언형 프로젝트 스캐폴딩 CLI")]
+#[command(
+    name = "scaffolder",
+    version,
+    about = "Scaffold new projects from declarative templates."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -17,9 +21,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// 템플릿을 target에 적용한다.
+    #[command(about = "Apply a template to a target directory.")]
     Apply(ApplyArgs),
-    /// 템플릿 스토어를 다룬다.
+    #[command(about = "Manage the template store.")]
     Template(TemplateArgs),
 }
 
@@ -31,11 +35,11 @@ struct TemplateArgs {
 
 #[derive(Debug, Subcommand)]
 enum TemplateCommand {
-    /// 스토어의 템플릿 목록을 출력한다.
+    #[command(about = "List the templates in the store.")]
     List(ListArgs),
-    /// 스토어에 신규 템플릿 뼈대를 생성한다.
+    #[command(about = "Create a new template skeleton in the store.")]
     New(NewArgs),
-    /// 템플릿을 정적 검사한다.
+    #[command(about = "Statically check templates.")]
     Validate(ValidateArgs),
 }
 

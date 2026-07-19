@@ -1,4 +1,4 @@
-//! `template new`(심플/full).
+//! The `template new` command (simple / full).
 
 use std::path::PathBuf;
 
@@ -11,13 +11,18 @@ use crate::infra::load::store::FsTemplateStore;
 
 #[derive(Debug, Args)]
 pub struct NewArgs {
-    /// 새 템플릿 이름(스토어 내 단일 경로 컴포넌트).
+    #[arg(help = "Name of the new template (a single path component in the store).")]
     pub name: String,
-    /// partials/data/hooks 샘플까지 포함한 전체 뼈대를 생성한다.
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Create the full skeleton, including partials/data/hooks samples."
+    )]
     pub full: bool,
-    /// 생성 대상 스토어. `$SCAFFOLDER_HOME`/`~/.scaffolder`보다 우선한다.
-    #[arg(long = "template-dir", value_name = "PATH")]
+    #[arg(
+        long = "template-dir",
+        value_name = "PATH",
+        help = "Store to create the template in; takes priority over $SCAFFOLDER_HOME/~/.scaffolder."
+    )]
     pub template_dir: Option<PathBuf>,
 }
 

@@ -1,4 +1,4 @@
-//! `template validate`.
+//! The `template validate` command.
 
 use std::path::PathBuf;
 
@@ -18,15 +18,20 @@ use crate::infra::render::render::MiniJinjaSyntaxChecker;
 
 #[derive(Debug, Args)]
 pub struct ValidateArgs {
-    /// 검사할 템플릿 이름(0개 이상). 미지정 시 스토어 전체를 검사한다.
-    #[arg(value_name = "NAME")]
+    #[arg(
+        value_name = "NAME",
+        help = "Templates to check (zero or more). When omitted, the whole store is checked."
+    )]
     pub names: Vec<String>,
-    /// 스토어 조회 시 `$SCAFFOLDER_HOME`/`~/.scaffolder`보다 우선하는 디렉토리.
-    #[arg(long = "template-dir", value_name = "PATH")]
+    #[arg(
+        long = "template-dir",
+        value_name = "PATH",
+        help = "Directory searched before $SCAFFOLDER_HOME/~/.scaffolder when resolving a store name."
+    )]
     pub template_dir: Option<PathBuf>,
 }
 
-/// 해석된 검사 대상: 이름 + 템플릿 루트.
+/// A resolved check target: name plus template root.
 struct Target {
     name: String,
     template_root: PathBuf,
@@ -53,9 +58,10 @@ pub fn run(args: ValidateArgs) -> Result<()> {
     Ok(())
 }
 
-/// `names`가 비면 스토어 전체를 열거해 대상으로 삼는다. `names`가 있으면 각각 개별 `resolve`하되,
-/// 실패한 이름은 즉시 출력하고 invalid 카운트에 반영한 뒤(대상 목록에는 넣지 않고) 다른 이름
-/// 검사를 계속한다.
+/// When `names` is empty, enumerate the whole store as the target set. When `names`
+/// is given, `resolve` each one individually; a name that fails to resolve is printed
+/// immediately and counted as invalid (not added to the target list), and the remaining
+/// names are still checked.
 fn resolve_targets(store: &FsTemplateStore, names: &[String]) -> Result<(Vec<Target>, usize)> {
     if names.is_empty() {
         let targets = store
@@ -86,10 +92,12 @@ fn resolve_targets(store: &FsTemplateStore, names: &[String]) -> Result<(Vec<Tar
     Ok((targets, invalid_count))
 }
 
-/// 대상 하나를 검사·출력한다. `true`면 유효, `false`면 무효(finding 있음 또는 검사 자체 실패).
+/// Checks and prints one target. `true` means valid, `false` means invalid (findings
+/// present, or the check itself failed).
 fn validate_one(target: &Target) -> bool {
-    // trust는 항상 false다 — validate는 `--trust` 플래그를 받지 않는다. 외부 심링크 제어파일은
-    // 각 로더 읽기 지점에서 거부되어 finding/에러로 표면화된다(보수적 기본 동작).
+    // trust is always false — validate takes no `--trust` flag. External-symlink control
+    // files are refused at each loader's read point and surface as findings/errors
+    // (the conservative default behavior).
     let effective_root = match FsSourceRootSource.resolve(&target.template_root) {
         Ok(root) => root,
         Err(err) => {
@@ -140,8 +148,8 @@ fn validate_one(target: &Target) -> bool {
     report.is_valid()
 }
 
-/// 템플릿별 그룹 리포트: 유효면 `"<name>: OK"`, 무효면 헤더 한 줄 + finding마다 오류류
-/// 라벨을 붙인 한 줄.
+/// Per-template grouped report: `"<name>: OK"` when valid, otherwise a header line plus
+/// one line per finding, each tagged with its finding-kind label.
 fn format_report(name: &str, report: &ValidationReport) -> String {
     if report.is_valid() {
         return format!("{name}: OK");

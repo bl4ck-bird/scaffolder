@@ -1,4 +1,4 @@
-//! `template` 서브커맨드.
+//! The `template` subcommand.
 
 pub mod list;
 pub mod new;

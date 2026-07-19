@@ -1,4 +1,4 @@
-//! 합성 루트: clap 파싱, 포트 배선, 서브커맨드 디스패치.
+//! Composition root: clap parsing, port wiring, and subcommand dispatch.
 
 pub mod command;
 pub mod commands;
