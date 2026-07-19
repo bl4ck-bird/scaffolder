@@ -1,13 +1,16 @@
-//! Trust guard for external-symlink control files. Called at the read point by each loader
-//! that could follow a symlink to read outside — a check-at-access (guard == executor), not a
-//! pre-flight scan, so there is no scan↔read TOCTOU window.
+//! Guards against control files that are symlinks pointing outside the template. Each loader
+//! that might follow such a symlink calls this at the exact point where it reads the file,
+//! rather than scanning everything up front. Because the check happens where the read happens —
+//! the same code both verifies the path and uses it — there is no gap in between for the symlink
+//! to be swapped out from under us (a TOCTOU race).
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
-/// Rejects when `path`'s canonical path is outside `root_canon` (escapes the source root)
-/// unless `trust`. A broken symlink (canonicalize failure) also errors. copier's
-/// `ForbiddenPathError` pattern.
+/// Resolves `path` to its real location and rejects it if that lands outside `root_canon` —
+/// meaning the symlink escaped the source root — unless the caller passed `trust` to allow it.
+/// A broken symlink (one that can't be resolved at all) is also rejected. This mirrors copier's
+/// `ForbiddenPathError`.
 pub fn ensure_within_root(path: &Path, root_canon: &Path, trust: bool) -> Result<()> {
     let canon = path
         .canonicalize()

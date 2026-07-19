@@ -45,9 +45,11 @@ pub fn safe_rel_path(input: &str) -> Result<RelPath> {
     Ok(RelPath(normalized))
 }
 
-/// Lexically normalizes an absolute target path (resolving `.`/`..`, but not symlinks).
-/// Settling the effective path stops a `..` input from (a) creating an unexpected empty
-/// sibling directory or (b) misleading the new/existing decision. `..` never climbs above root.
+/// Normalizes an absolute target path by resolving `.` and `..` textually, without touching
+/// symlinks. Pinning down the real path up front matters for two reasons: a `..` left in the
+/// path could otherwise create an unexpected empty directory next to the intended one, and it
+/// could also throw off the later "did this already exist?" decision. A `..` never climbs above
+/// the root.
 pub fn normalize_target(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -128,9 +130,11 @@ pub struct DestStatus {
     pub is_symlink: bool,
 }
 
-/// Result of `ensure_target`: whether we created the target (cleanup candidate on failure)
-/// or it pre-existed (preserved). Decided by exclusively creating the final component rather
-/// than `exists()`, so there is no `..`/create-race misjudgment.
+/// Reports whether `ensure_target` created the target directory or found it already there. If
+/// we created it, it is a candidate for cleanup should apply fail; if it was already there, it
+/// holds the user's data and is left alone. The distinction is drawn by trying to create the
+/// final path component exclusively and seeing whether that succeeds — not by an `exists()`
+/// check, which a `..` in the path or a concurrent creation could answer wrongly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetPreparation {
     /// This run created the final component → cleanup candidate on failure.
