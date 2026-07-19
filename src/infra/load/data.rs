@@ -62,6 +62,7 @@ impl DataSource for FsDataSource {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
     fn table(pairs: Vec<(&str, DataValue)>) -> DataValue {
@@ -143,8 +144,6 @@ mod tests {
 
     #[test]
     fn internal_symlinked_data_dir_is_allowed() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let real_data = dir.path().join("real-data");
         fs::create_dir_all(&real_data).unwrap();
@@ -159,8 +158,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_data_dir_is_rejected_without_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
         let external_data = outside.path().join("data");
@@ -174,8 +171,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_data_dir_is_allowed_with_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
         let external_data = outside.path().join("data");
@@ -188,6 +183,44 @@ mod tests {
             trust: true,
         };
         let loaded = trusted.load(dir.path(), DataValue::empty_table()).unwrap();
+        assert_eq!(get(&loaded, "k"), Some(&DataValue::Int(1)));
+    }
+
+    #[test]
+    fn in_dir_file_symlink_to_external_is_skipped_not_followed() {
+        let dir = TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        let outside = TempDir::new().unwrap();
+        // Malformed TOML: if a regression ever followed and parsed this symlink, the load would
+        // fail loudly instead of silently returning an empty table.
+        let secret = outside.path().join("secret.toml");
+        fs::write(&secret, "leaked = = =\n").unwrap();
+        symlink(&secret, data.join("a.toml")).unwrap();
+
+        let loaded = source(dir.path())
+            .load(dir.path(), DataValue::empty_table())
+            .unwrap();
+
+        // file_type() does not follow the symlink, so the entry is not a file and is skipped:
+        // no external read, no trust bypass, and no error.
+        assert_eq!(loaded, DataValue::Table(BTreeMap::new()));
+    }
+
+    #[test]
+    fn non_toml_files_in_data_dir_are_ignored() {
+        let dir = TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("a.toml"), "k = 1\n").unwrap();
+        // Non-.toml files are skipped by extension, so this invalid-TOML content is never parsed.
+        fs::write(data.join("notes.txt"), "this is not toml === {{{").unwrap();
+        fs::write(data.join("README"), "no extension").unwrap();
+
+        let loaded = source(dir.path())
+            .load(dir.path(), DataValue::empty_table())
+            .unwrap();
+
         assert_eq!(get(&loaded, "k"), Some(&DataValue::Int(1)));
     }
 }

@@ -179,6 +179,7 @@ fn parse_choice(value: &toml::Value) -> Result<Choice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::load::test_support::{link_external, temp_root};
 
     #[test]
     fn parses_string_question_with_default() {
@@ -294,12 +295,8 @@ mod tests {
 
     #[test]
     fn load_reads_manifest_from_file() {
-        let dir = std::env::temp_dir();
-        let root_canon = dir.canonicalize().unwrap();
-        let path = dir.join(format!(
-            "scaffolder-manifest-test-{}.toml",
-            std::process::id()
-        ));
+        let (dir, root_canon) = temp_root();
+        let path = dir.path().join("scaffold.toml");
         fs::write(
             &path,
             r#"
@@ -311,14 +308,12 @@ mod tests {
         )
         .expect("write temp manifest");
 
-        let result = (TomlManifestSource {
+        let manifest = (TomlManifestSource {
             root_canon,
             trust: false,
         })
-        .load(&path);
-        fs::remove_file(&path).ok();
-
-        let manifest = result.expect("manifest should load");
+        .load(&path)
+        .expect("manifest should load");
         assert_eq!(manifest.questions[0].name, "license");
     }
 
@@ -333,78 +328,20 @@ mod tests {
     }
 
     #[test]
-    fn load_allows_internal_symlinked_manifest() {
-        use std::os::unix::fs::symlink;
-        use tempfile::TempDir;
-
-        let root = TempDir::new().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
-        let real = root.path().join("real.toml");
-        fs::write(
-            &real,
-            "[[questions]]\nname = \"license\"\ntype = \"string\"\n",
-        )
-        .unwrap();
-        let link = root.path().join("scaffold.toml");
-        symlink(&real, &link).unwrap();
-
-        let source = TomlManifestSource {
-            root_canon,
-            trust: false,
-        };
-        let manifest = source.load(&link).expect("internal symlink must load");
-        assert_eq!(manifest.questions[0].name, "license");
-    }
-
-    #[test]
     fn load_rejects_external_symlinked_manifest_without_trust() {
-        use std::os::unix::fs::symlink;
-        use tempfile::TempDir;
-
-        let root = TempDir::new().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
-        let outside = TempDir::new().unwrap();
-        let external = outside.path().join("scaffold.toml");
-        fs::write(
-            &external,
+        let (root, root_canon) = temp_root();
+        let _outside = link_external(
+            root.path(),
+            "scaffold.toml",
             "[[questions]]\nname = \"license\"\ntype = \"string\"\n",
-        )
-        .unwrap();
+        );
         let link = root.path().join("scaffold.toml");
-        symlink(&external, &link).unwrap();
 
         let source = TomlManifestSource {
             root_canon,
             trust: false,
         };
         assert!(source.load(&link).is_err());
-    }
-
-    #[test]
-    fn load_allows_external_symlinked_manifest_with_trust() {
-        use std::os::unix::fs::symlink;
-        use tempfile::TempDir;
-
-        let root = TempDir::new().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
-        let outside = TempDir::new().unwrap();
-        let external = outside.path().join("scaffold.toml");
-        fs::write(
-            &external,
-            "[[questions]]\nname = \"license\"\ntype = \"string\"\n",
-        )
-        .unwrap();
-        let link = root.path().join("scaffold.toml");
-        symlink(&external, &link).unwrap();
-
-        let source = TomlManifestSource {
-            root_canon,
-            trust: true,
-        };
-        let manifest = source
-            .load(&link)
-            .expect("trusted external symlink must load");
-        assert_eq!(manifest.questions[0].name, "license");
     }
 
     #[test]

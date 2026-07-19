@@ -100,6 +100,7 @@ fn collect(
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
     fn source(dir: &Path) -> FsPartialSource {
@@ -136,8 +137,6 @@ mod tests {
 
     #[test]
     fn internal_symlinked_partial_is_allowed() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
@@ -154,8 +153,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_partial_is_rejected_without_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
@@ -170,8 +167,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_partial_is_allowed_with_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
@@ -190,8 +185,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_partials_root_is_rejected_without_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
         let external_partials = outside.path().join("partials");
@@ -205,8 +198,6 @@ mod tests {
 
     #[test]
     fn internal_symlinked_subdir_partials_load() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
@@ -224,8 +215,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_subdir_is_rejected_without_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
@@ -241,8 +230,6 @@ mod tests {
 
     #[test]
     fn external_symlinked_subdir_is_allowed_with_trust() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
@@ -269,8 +256,6 @@ mod tests {
     /// drop the rest; an ancestor chain (only the current recursion path) preserves the diamond.
     #[test]
     fn diamond_symlinked_dirs_both_load_independently() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(partials.join("real")).unwrap();
@@ -287,8 +272,6 @@ mod tests {
 
     #[test]
     fn symlinked_subdir_cycle_terminates_without_infinite_recursion() {
-        use std::os::unix::fs::symlink;
-
         let dir = TempDir::new().unwrap();
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();

@@ -137,4 +137,16 @@ mod tests {
         fs::write(dir.path().join(".scaffoldroot"), "link").unwrap();
         assert!(FsSourceRootSource.resolve(dir.path()).is_err());
     }
+
+    #[test]
+    fn resolves_subpath_through_internal_symlink() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real-template");
+        fs::create_dir_all(&real).unwrap();
+        symlink(&real, dir.path().join("link")).unwrap();
+        fs::write(dir.path().join(".scaffoldroot"), "link\n").unwrap();
+
+        let resolved = FsSourceRootSource.resolve(dir.path()).unwrap();
+        assert_eq!(resolved, real.canonicalize().unwrap());
+    }
 }

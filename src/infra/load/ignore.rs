@@ -104,9 +104,10 @@ impl IgnoreMatcher for GitignoreMatcher {
 mod tests {
     use super::*;
     use crate::domain::answer::{ScaffolderBuiltins, build_context};
+    use crate::infra::load::test_support::{link_external, link_internal, temp_root};
     use std::collections::BTreeMap;
+    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
-    use tempfile::tempdir;
 
     fn builtins() -> ScaffolderBuiltins {
         ScaffolderBuiltins {
@@ -140,8 +141,7 @@ mod tests {
 
     #[test]
     fn static_ignore_file_matches_glob_against_output_path() {
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         fs::write(dir.path().join(STATIC_NAME), "*.tmp\n").unwrap();
 
         let renderer = NoopRenderer;
@@ -155,8 +155,7 @@ mod tests {
 
     #[test]
     fn jinja_ignore_file_is_rendered_with_answer_context() {
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         fs::write(
             dir.path().join(JINJA_NAME),
             "{% if \"docker\" not in stacks %}Dockerfile{% endif %}\n",
@@ -177,8 +176,7 @@ mod tests {
 
     #[test]
     fn missing_ignore_file_yields_matcher_that_ignores_nothing() {
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
 
         let renderer = NoopRenderer;
         let source = FsIgnoreSource::new(&renderer, root_canon, false);
@@ -190,8 +188,7 @@ mod tests {
 
     #[test]
     fn static_ignore_file_directory_pattern_excludes_subtree_files() {
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         fs::write(dir.path().join(STATIC_NAME), "build/\n").unwrap();
 
         let renderer = NoopRenderer;
@@ -205,8 +202,7 @@ mod tests {
 
     #[test]
     fn negation_pattern_unexcludes_matched_file() {
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         fs::write(dir.path().join(STATIC_NAME), "*.log\n!keep.log\n").unwrap();
 
         let renderer = NoopRenderer;
@@ -220,8 +216,7 @@ mod tests {
 
     #[test]
     fn both_static_and_jinja_ignore_files_present_is_an_error() {
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         fs::write(dir.path().join(STATIC_NAME), "*.tmp\n").unwrap();
         fs::write(dir.path().join(JINJA_NAME), "*.tmp\n").unwrap();
 
@@ -234,13 +229,8 @@ mod tests {
 
     #[test]
     fn static_ignore_file_via_internal_symlink_is_allowed() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
-        let real = dir.path().join("real.scaffoldignore");
-        fs::write(&real, "*.tmp\n").unwrap();
-        symlink(&real, dir.path().join(STATIC_NAME)).unwrap();
+        let (dir, root_canon) = temp_root();
+        link_internal(dir.path(), "real.scaffoldignore", STATIC_NAME, "*.tmp\n");
 
         let renderer = NoopRenderer;
         let source = FsIgnoreSource::new(&renderer, root_canon, false);
@@ -252,14 +242,8 @@ mod tests {
 
     #[test]
     fn static_ignore_file_via_external_symlink_is_rejected_without_trust() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
-        let outside = tempdir().unwrap();
-        let external = outside.path().join(STATIC_NAME);
-        fs::write(&external, "*.tmp\n").unwrap();
-        symlink(&external, dir.path().join(STATIC_NAME)).unwrap();
+        let (dir, root_canon) = temp_root();
+        let _outside = link_external(dir.path(), STATIC_NAME, "*.tmp\n");
 
         let renderer = NoopRenderer;
         let source = FsIgnoreSource::new(&renderer, root_canon, false);
@@ -270,10 +254,7 @@ mod tests {
 
     #[test]
     fn broken_symlink_static_ignore_file_is_rejected() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         symlink(dir.path().join("nowhere"), dir.path().join(STATIC_NAME)).unwrap();
 
         let renderer = NoopRenderer;
@@ -285,10 +266,7 @@ mod tests {
 
     #[test]
     fn broken_symlink_jinja_ignore_file_is_rejected() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
+        let (dir, root_canon) = temp_root();
         symlink(dir.path().join("nowhere"), dir.path().join(JINJA_NAME)).unwrap();
 
         let renderer = NoopRenderer;
@@ -300,14 +278,8 @@ mod tests {
 
     #[test]
     fn static_ignore_file_via_external_symlink_is_allowed_with_trust() {
-        use std::os::unix::fs::symlink;
-
-        let dir = tempdir().unwrap();
-        let root_canon = dir.path().canonicalize().unwrap();
-        let outside = tempdir().unwrap();
-        let external = outside.path().join(STATIC_NAME);
-        fs::write(&external, "*.tmp\n").unwrap();
-        symlink(&external, dir.path().join(STATIC_NAME)).unwrap();
+        let (dir, root_canon) = temp_root();
+        let _outside = link_external(dir.path(), STATIC_NAME, "*.tmp\n");
 
         let renderer = NoopRenderer;
         let source = FsIgnoreSource::new(&renderer, root_canon, true);
@@ -315,5 +287,17 @@ mod tests {
         let matcher = source.load(dir.path(), &ctx).unwrap();
 
         assert!(matcher.is_ignored(Path::new("foo.tmp")));
+    }
+
+    #[test]
+    fn jinja_ignore_file_via_external_symlink_is_rejected_without_trust() {
+        let (dir, root_canon) = temp_root();
+        let _outside = link_external(dir.path(), JINJA_NAME, "*.tmp\n");
+
+        let renderer = NoopRenderer;
+        let source = FsIgnoreSource::new(&renderer, root_canon, false);
+        let ctx = ctx_with_stacks(vec![]);
+
+        assert!(source.load(dir.path(), &ctx).is_err());
     }
 }

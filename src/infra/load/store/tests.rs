@@ -5,6 +5,8 @@ use std::sync::Mutex;
 
 use tempfile::tempdir;
 
+use crate::infra::load::test_support::write_template;
+
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// `SCAFFOLDER_HOME`/`XDG_CONFIG_HOME` are process-global and would cross-contaminate under
@@ -49,8 +51,7 @@ fn resolves_existing_local_directory_as_is() {
 fn resolves_store_name_from_template_dir_override() {
     let template_dir = tempdir().expect("tempdir");
     let template_path = template_dir.path().join("myapp");
-    std::fs::create_dir_all(&template_path).expect("create template dir");
-    std::fs::write(template_path.join("scaffold.toml"), "").expect("write manifest");
+    write_template(template_dir.path(), "myapp");
 
     let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
 
@@ -68,12 +69,8 @@ fn template_dir_takes_priority_over_scaffolder_home() {
     let scaffolder_home = tempdir().expect("tempdir");
 
     let winner = template_dir.path().join("shared");
-    std::fs::create_dir_all(&winner).expect("create winner dir");
-    std::fs::write(winner.join("scaffold.toml"), "").expect("write manifest");
-
-    let loser = scaffolder_home.path().join("shared");
-    std::fs::create_dir_all(&loser).expect("create loser dir");
-    std::fs::write(loser.join("scaffold.toml"), "").expect("write manifest");
+    write_template(template_dir.path(), "shared");
+    write_template(scaffolder_home.path(), "shared");
 
     let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
 
@@ -93,8 +90,7 @@ fn template_dir_takes_priority_over_scaffolder_home() {
 fn scaffolder_home_is_used_when_no_template_dir_override() {
     let scaffolder_home = tempdir().expect("tempdir");
     let template_path = scaffolder_home.path().join("fromhome");
-    std::fs::create_dir_all(&template_path).expect("create template dir");
-    std::fs::write(template_path.join("scaffold.toml"), "").expect("write manifest");
+    write_template(scaffolder_home.path(), "fromhome");
 
     let store = FsTemplateStore::new(None);
 
@@ -117,8 +113,7 @@ fn scaffolder_home_is_used_when_no_template_dir_override() {
 fn xdg_config_home_is_used_when_no_scaffolder_home_or_template_dir() {
     let xdg_home = tempdir().expect("tempdir");
     let template_path = xdg_home.path().join("scaffolder").join("fromxdg");
-    std::fs::create_dir_all(&template_path).expect("create template dir");
-    std::fs::write(template_path.join("scaffold.toml"), "").expect("write manifest");
+    write_template(&xdg_home.path().join("scaffolder"), "fromxdg");
 
     let store = FsTemplateStore::new(None);
 
@@ -143,12 +138,8 @@ fn scaffolder_home_takes_priority_over_xdg_config_home() {
     let xdg_home = tempdir().expect("tempdir");
 
     let winner = scaffolder_home.path().join("shared");
-    std::fs::create_dir_all(&winner).expect("create winner dir");
-    std::fs::write(winner.join("scaffold.toml"), "").expect("write manifest");
-
-    let loser = xdg_home.path().join("scaffolder").join("shared");
-    std::fs::create_dir_all(&loser).expect("create loser dir");
-    std::fs::write(loser.join("scaffold.toml"), "").expect("write manifest");
+    write_template(scaffolder_home.path(), "shared");
+    write_template(&xdg_home.path().join("scaffolder"), "shared");
 
     let store = FsTemplateStore::new(None);
 
@@ -174,8 +165,7 @@ fn scaffolder_home_takes_priority_over_xdg_config_home() {
 fn empty_scaffolder_home_is_skipped_in_favor_of_next_tier() {
     let xdg_home = tempdir().expect("tempdir");
     let template_path = xdg_home.path().join("scaffolder").join("fromxdg");
-    std::fs::create_dir_all(&template_path).expect("create template dir");
-    std::fs::write(template_path.join("scaffold.toml"), "").expect("write manifest");
+    write_template(&xdg_home.path().join("scaffolder"), "fromxdg");
 
     let store = FsTemplateStore::new(None);
 
@@ -190,6 +180,27 @@ fn empty_scaffolder_home_is_skipped_in_favor_of_next_tier() {
         || store.resolve("fromxdg"),
     )
     .expect("empty SCAFFOLDER_HOME should be skipped, resolving via XDG_CONFIG_HOME");
+
+    assert_eq!(resolved, template_path);
+}
+
+#[test]
+fn resolves_from_home_tier() {
+    let fake_home = tempdir().expect("tempdir");
+    let template_path = fake_home.path().join(".scaffolder").join("fromhome");
+    write_template(&fake_home.path().join(".scaffolder"), "fromhome");
+
+    let store = FsTemplateStore::new(None);
+
+    let resolved = with_env_vars(
+        &[
+            ("SCAFFOLDER_HOME", None),
+            ("XDG_CONFIG_HOME", None),
+            ("HOME", Some(fake_home.path().to_str().expect("utf8 path"))),
+        ],
+        || store.resolve("fromhome"),
+    )
+    .expect("~/.scaffolder home tier should resolve");
 
     assert_eq!(resolved, template_path);
 }
@@ -223,8 +234,7 @@ fn falls_through_to_scaffolder_home_when_name_absent_from_template_dir() {
     let scaffolder_home = tempdir().expect("tempdir");
 
     let template_path = scaffolder_home.path().join("onlyhome");
-    std::fs::create_dir_all(&template_path).expect("create template dir");
-    std::fs::write(template_path.join("scaffold.toml"), "").expect("write manifest");
+    write_template(scaffolder_home.path(), "onlyhome");
 
     let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
 
@@ -287,12 +297,10 @@ fn list_enumerates_templates_across_bases_in_priority_order() {
     let fake_home = tempdir().expect("tempdir");
 
     let from_template_dir = template_dir.path().join("alpha");
-    std::fs::create_dir_all(&from_template_dir).expect("create template dir");
-    std::fs::write(from_template_dir.join("scaffold.toml"), "").expect("write manifest");
+    write_template(template_dir.path(), "alpha");
 
     let from_scaffolder_home = scaffolder_home.path().join("beta");
-    std::fs::create_dir_all(&from_scaffolder_home).expect("create template dir");
-    std::fs::write(from_scaffolder_home.join("scaffold.toml"), "").expect("write manifest");
+    write_template(scaffolder_home.path(), "beta");
 
     let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
 
@@ -323,9 +331,7 @@ fn list_excludes_directories_without_scaffold_toml() {
     let template_dir = tempdir().expect("tempdir");
     let fake_home = tempdir().expect("tempdir");
 
-    let valid = template_dir.path().join("valid");
-    std::fs::create_dir_all(&valid).expect("create template dir");
-    std::fs::write(valid.join("scaffold.toml"), "").expect("write manifest");
+    write_template(template_dir.path(), "valid");
 
     let not_a_template = template_dir.path().join("not-a-template");
     std::fs::create_dir_all(&not_a_template).expect("create plain dir");

@@ -9,6 +9,9 @@ pub mod source_root;
 pub mod store;
 pub mod trust;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use anyhow::{Result, bail};
 
 use crate::domain::answer::AnswerValue;
