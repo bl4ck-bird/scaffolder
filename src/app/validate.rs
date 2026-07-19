@@ -73,7 +73,13 @@ pub fn validate_template(template_root: &Path, ports: ValidatePorts) -> Result<V
 
     let partials = ports.partial_source.load(template_root)?;
     for (name, source) in &partials {
-        check_template_source(&format!("partials/{name}"), source, &partials, ports.syntax, &mut findings);
+        check_template_source(
+            &format!("partials/{name}"),
+            source,
+            &partials,
+            ports.syntax,
+            &mut findings,
+        );
     }
 
     let files_root = template_root.join("files");
@@ -107,7 +113,10 @@ pub fn validate_template(template_root: &Path, ports: ValidatePorts) -> Result<V
 
         let out_rel_str = match entry.rel.as_path().parent() {
             Some(parent) if parent.as_os_str().is_empty() => parsed.output_base.clone(),
-            Some(parent) => parent.join(&parsed.output_base).to_string_lossy().into_owned(),
+            Some(parent) => parent
+                .join(&parsed.output_base)
+                .to_string_lossy()
+                .into_owned(),
             None => parsed.output_base.clone(),
         };
 
@@ -129,12 +138,20 @@ pub fn validate_template(template_root: &Path, ports: ValidatePorts) -> Result<V
         let raw = ports.payload.read_content(&files_root, entry)?;
         match String::from_utf8(raw) {
             Ok(text) => {
-                check_template_source(&entry_display, &text, &partials, ports.syntax, &mut findings);
+                check_template_source(
+                    &entry_display,
+                    &text,
+                    &partials,
+                    ports.syntax,
+                    &mut findings,
+                );
             }
             Err(_) => {
                 findings.push(Finding {
                     kind: FindingKind::TemplateSyntax,
-                    message: format!("{entry_display}: marked for rendering but is not valid UTF-8"),
+                    message: format!(
+                        "{entry_display}: marked for rendering but is not valid UTF-8"
+                    ),
                 });
             }
         }
@@ -283,7 +300,10 @@ mod tests {
     }
     impl FakePayloadStore {
         fn empty() -> Self {
-            Self { entries: Vec::new(), contents: HashMap::new() }
+            Self {
+                entries: Vec::new(),
+                contents: HashMap::new(),
+            }
         }
     }
     impl PayloadStore for FakePayloadStore {
@@ -292,7 +312,11 @@ mod tests {
         }
 
         fn read_content(&self, _source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>> {
-            Ok(self.contents.get(&entry.rel.to_string()).cloned().unwrap_or_default())
+            Ok(self
+                .contents
+                .get(&entry.rel.to_string())
+                .cloned()
+                .unwrap_or_default())
         }
 
         fn ensure_target(
@@ -342,7 +366,10 @@ mod tests {
     }
 
     fn entry(rel: &str) -> PayloadEntry {
-        PayloadEntry { rel: crate::domain::place::safe_rel_path(rel).unwrap(), is_dir: false }
+        PayloadEntry {
+            rel: crate::domain::place::safe_rel_path(rel).unwrap(),
+            is_dir: false,
+        }
     }
 
     fn question(name: &str, when: Option<&str>) -> Question {
@@ -379,7 +406,11 @@ mod tests {
         )
         .expect("validate should succeed");
 
-        assert!(report.is_valid(), "expected no findings, got {:?}", report.findings);
+        assert!(
+            report.is_valid(),
+            "expected no findings, got {:?}",
+            report.findings
+        );
     }
 
     #[test]
@@ -421,8 +452,18 @@ mod tests {
         .expect("validate should succeed");
 
         assert_eq!(report.findings.len(), 2);
-        assert!(report.findings.iter().any(|f| f.kind == FindingKind::Manifest));
-        assert!(report.findings.iter().any(|f| f.kind == FindingKind::FileName));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::Manifest)
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::FileName)
+        );
     }
 
     #[test]
@@ -519,7 +560,10 @@ mod tests {
     fn hook_when_syntax_violation_is_finding() {
         let manifest = Manifest {
             hooks: Hooks {
-                before: vec![Hook { when: Some("BAD_EXPR".to_string()), run: "echo hi".to_string() }],
+                before: vec![Hook {
+                    when: Some("BAD_EXPR".to_string()),
+                    run: "echo hi".to_string(),
+                }],
                 after: vec![],
             },
             ..Default::default()
@@ -602,7 +646,8 @@ mod tests {
                 b"{%- include 'greeting' -%}".to_vec(),
             )]),
         };
-        let partials = FakePartialSource(BTreeMap::from([("greeting".to_string(), "hi".to_string())]));
+        let partials =
+            FakePartialSource(BTreeMap::from([("greeting".to_string(), "hi".to_string())]));
 
         let report = validate_template(
             Path::new("/tpl"),
@@ -623,7 +668,10 @@ mod tests {
         let manifest = Manifest::default();
         let store = FakePayloadStore {
             entries: vec![entry("README.md.jinja")],
-            contents: HashMap::from([("README.md.jinja".to_string(), b"{% include which_partial %}".to_vec())]),
+            contents: HashMap::from([(
+                "README.md.jinja".to_string(),
+                b"{% include which_partial %}".to_vec(),
+            )]),
         };
 
         let report = validate_template(
@@ -637,7 +685,11 @@ mod tests {
         )
         .expect("validate should succeed");
 
-        assert!(report.is_valid(), "dynamic include must not be checked: {:?}", report.findings);
+        assert!(
+            report.is_valid(),
+            "dynamic include must not be checked: {:?}",
+            report.findings
+        );
     }
 
     #[test]
@@ -647,7 +699,10 @@ mod tests {
         let manifest = Manifest::default();
         let store = FakePayloadStore {
             entries: vec![entry("README.md.jinja")],
-            contents: HashMap::from([("README.md.jinja".to_string(), b"{{ totally_undefined }}".to_vec())]),
+            contents: HashMap::from([(
+                "README.md.jinja".to_string(),
+                b"{{ totally_undefined }}".to_vec(),
+            )]),
         };
 
         let report = validate_template(
@@ -685,7 +740,17 @@ mod tests {
         .expect("validate should succeed");
 
         assert_eq!(report.findings.len(), 2);
-        assert!(report.findings.iter().any(|f| f.kind == FindingKind::TemplateSyntax));
-        assert!(report.findings.iter().any(|f| f.kind == FindingKind::PartialReference));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::TemplateSyntax)
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::PartialReference)
+        );
     }
 }

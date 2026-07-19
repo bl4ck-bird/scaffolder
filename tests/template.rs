@@ -50,7 +50,9 @@ fn template_list_empty_store_prints_guidance() {
         .arg("--template-dir")
         .arg(store_dir.path());
 
-    cmd.assert().success().stdout(contains("No templates found."));
+    cmd.assert()
+        .success()
+        .stdout(contains("No templates found."));
 }
 
 #[test]
@@ -73,7 +75,9 @@ fn template_list_duplicate_name_across_bases_shows_base_hint() {
     cmd.assert()
         .success()
         .stdout(contains(template_dir.path().to_str().expect("utf8 path")))
-        .stdout(contains(scaffolder_home.path().to_str().expect("utf8 path")));
+        .stdout(contains(
+            scaffolder_home.path().to_str().expect("utf8 path"),
+        ));
 }
 
 fn new_cmd(store_dir: &std::path::Path, fake_home: &std::path::Path) -> Command {
@@ -228,7 +232,9 @@ fn template_validate_no_names_validates_whole_store() {
         .assert()
         .success();
 
-    let assert = validate_cmd(store_dir.path(), fake_home.path()).assert().success();
+    let assert = validate_cmd(store_dir.path(), fake_home.path())
+        .assert()
+        .success();
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
     assert!(stdout.contains("alpha: OK"), "stdout: {stdout}");
     assert!(stdout.contains("beta: OK"), "stdout: {stdout}");
@@ -256,8 +262,11 @@ fn template_validate_reports_invalid_type_finding() {
 
     let manifest_path = store_dir.path().join("demo/scaffold.toml");
     let manifest = fs::read_to_string(&manifest_path).expect("read manifest");
-    fs::write(&manifest_path, manifest.replace("type = \"string\"", "type = \"bogus\""))
-        .expect("corrupt manifest with invalid type");
+    fs::write(
+        &manifest_path,
+        manifest.replace("type = \"string\"", "type = \"bogus\""),
+    )
+    .expect("corrupt manifest with invalid type");
 
     let assert = validate_cmd(store_dir.path(), fake_home.path())
         .arg("demo")
@@ -269,7 +278,10 @@ fn template_validate_reports_invalid_type_finding() {
     // 근본 원인이 노출돼야 한다 — top-level context만으로 묻히면 안 된다.
     assert!(stdout.contains("unknown type"), "stdout: {stdout}");
     assert!(stdout.contains("\"bogus\""), "stdout: {stdout}");
-    assert!(stdout.matches("scaffold.toml").count() == 1, "path should not be duplicated, stdout: {stdout}");
+    assert!(
+        stdout.matches("scaffold.toml").count() == 1,
+        "path should not be duplicated, stdout: {stdout}"
+    );
 }
 
 #[test]

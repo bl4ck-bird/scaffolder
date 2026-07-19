@@ -11,10 +11,8 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// 오염시킨다 — 뮤텍스로 직렬화하고 이전 값을 저장·복원한다.
 fn with_env_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let previous: Vec<(&str, Option<String>)> = vars
-        .iter()
-        .map(|(k, _)| (*k, env::var(k).ok()))
-        .collect();
+    let previous: Vec<(&str, Option<String>)> =
+        vars.iter().map(|(k, _)| (*k, env::var(k).ok())).collect();
 
     for (k, v) in vars {
         match v {
@@ -58,8 +56,8 @@ fn resolves_store_name_from_template_dir_override() {
 
     // resolve reads SCAFFOLDER_HOME/XDG_CONFIG_HOME even on the template-dir hit path,
     // so it must serialize against other tests that mutate those vars concurrently.
-    let resolved = with_env_vars(&[], || store.resolve("myapp"))
-        .expect("store name should resolve");
+    let resolved =
+        with_env_vars(&[], || store.resolve("myapp")).expect("store name should resolve");
 
     assert_eq!(resolved, template_path);
 }
@@ -411,7 +409,9 @@ fn create_creates_missing_base_dir() {
     let store = FsTemplateStore::new(Some(base.clone()));
     let entries = crate::domain::skeleton::skeleton(false);
 
-    let created = store.create("demo", &entries).expect("create should succeed");
+    let created = store
+        .create("demo", &entries)
+        .expect("create should succeed");
 
     assert!(base.is_dir());
     assert_eq!(created, base.join("demo"));
@@ -434,7 +434,10 @@ fn create_errors_and_has_no_side_effects_when_name_already_exists() {
     let remaining: Vec<_> = std::fs::read_dir(&existing)
         .expect("read existing dir")
         .collect();
-    assert!(remaining.is_empty(), "create must not write into an existing target");
+    assert!(
+        remaining.is_empty(),
+        "create must not write into an existing target"
+    );
 }
 
 #[test]

@@ -44,12 +44,20 @@ pub fn confirm_description(
     lines.join("\n")
 }
 
-fn push_phase_lines(lines: &mut Vec<String>, phase: &str, inline: &[&Hook], scripts: &[HookScript]) {
+fn push_phase_lines(
+    lines: &mut Vec<String>,
+    phase: &str,
+    inline: &[&Hook],
+    scripts: &[HookScript],
+) {
     for hook in inline {
         lines.push(format!("{phase}: {}", sanitize_for_display(&hook.run)));
     }
     for script in scripts {
-        lines.push(format!("{phase}: run {}", sanitize_for_display(script_name(script))));
+        lines.push(format!(
+            "{phase}: run {}",
+            sanitize_for_display(script_name(script))
+        ));
     }
 }
 
@@ -105,7 +113,7 @@ pub fn run_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::answer::{build_context, ScaffolderBuiltins};
+    use crate::domain::answer::{ScaffolderBuiltins, build_context};
     use crate::domain::data::DataValue;
     use std::cell::RefCell;
     use std::path::PathBuf;
@@ -125,7 +133,10 @@ mod tests {
     }
 
     fn hook(run: &str, when: Option<&str>) -> Hook {
-        Hook { when: when.map(|w| w.to_string()), run: run.to_string() }
+        Hook {
+            when: when.map(|w| w.to_string()),
+            run: run.to_string(),
+        }
     }
 
     struct FixedConditionEvaluator(std::collections::HashMap<String, bool>);
@@ -138,9 +149,7 @@ mod tests {
     #[test]
     fn collect_active_inline_keeps_no_when_and_active_when_in_declared_order() {
         let hooks = vec![hook("a", None), hook("b", Some("gate")), hook("c", None)];
-        let evaluator = FixedConditionEvaluator(
-            [("gate".to_string(), true)].into_iter().collect(),
-        );
+        let evaluator = FixedConditionEvaluator([("gate".to_string(), true)].into_iter().collect());
 
         let active = collect_active_inline(&hooks, &ctx(), &evaluator).expect("collect");
 
@@ -185,9 +194,18 @@ mod tests {
 
         let desc = confirm_description(&before_inline, &[], &[], &[]);
 
-        assert!(!desc.contains('\x1b'), "raw ESC must not reach the terminal: {desc:?}");
-        assert!(!desc.contains('\r'), "raw CR must not reach the terminal: {desc:?}");
-        assert!(desc.contains("\\u{1b}") || desc.contains("\\x1b"), "escaped ESC must be visible: {desc:?}");
+        assert!(
+            !desc.contains('\x1b'),
+            "raw ESC must not reach the terminal: {desc:?}"
+        );
+        assert!(
+            !desc.contains('\r'),
+            "raw CR must not reach the terminal: {desc:?}"
+        );
+        assert!(
+            desc.contains("\\u{1b}") || desc.contains("\\x1b"),
+            "escaped ESC must be visible: {desc:?}"
+        );
         assert!(desc.contains("\\r"), "escaped CR must be visible: {desc:?}");
     }
 
@@ -200,8 +218,14 @@ mod tests {
 
         let desc = confirm_description(&[], &[script], &[], &[]);
 
-        assert!(!desc.contains('\x1b'), "raw ESC must not reach the terminal: {desc:?}");
-        assert!(!desc.contains('\r'), "raw CR must not reach the terminal: {desc:?}");
+        assert!(
+            !desc.contains('\x1b'),
+            "raw ESC must not reach the terminal: {desc:?}"
+        );
+        assert!(
+            !desc.contains('\r'),
+            "raw CR must not reach the terminal: {desc:?}"
+        );
     }
 
     struct RecordingRunner {
@@ -209,16 +233,30 @@ mod tests {
     }
     impl RecordingRunner {
         fn new() -> Self {
-            Self { calls: RefCell::new(Vec::new()) }
+            Self {
+                calls: RefCell::new(Vec::new()),
+            }
         }
     }
     impl HookRunner for RecordingRunner {
-        fn run_inline(&self, command: &str, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+        fn run_inline(
+            &self,
+            command: &str,
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
             self.calls.borrow_mut().push(format!("inline:{command}"));
             Ok(())
         }
-        fn run_script_file(&self, path: &Path, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
-            self.calls.borrow_mut().push(format!("script:{}", path.display()));
+        fn run_script_file(
+            &self,
+            path: &Path,
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(format!("script:{}", path.display()));
             Ok(())
         }
         fn run_rendered(
@@ -228,9 +266,10 @@ mod tests {
             _cwd: &Path,
             _env: &BTreeMap<String, String>,
         ) -> Result<()> {
-            self.calls
-                .borrow_mut()
-                .push(format!("rendered:{name}:{}", String::from_utf8_lossy(content)));
+            self.calls.borrow_mut().push(format!(
+                "rendered:{name}:{}",
+                String::from_utf8_lossy(content)
+            ));
             Ok(())
         }
     }
@@ -248,8 +287,14 @@ mod tests {
         let b = hook("cmd-b", None);
         let inline = vec![&a, &b];
         let scripts = vec![
-            HookScript::Executable { name: "z.sh".to_string(), path: PathBuf::from("/tpl/hooks/before/z.sh") },
-            HookScript::Template { name: "y.sh".to_string(), raw: "raw-content".to_string() },
+            HookScript::Executable {
+                name: "z.sh".to_string(),
+                path: PathBuf::from("/tpl/hooks/before/z.sh"),
+            },
+            HookScript::Template {
+                name: "y.sh".to_string(),
+                raw: "raw-content".to_string(),
+            },
         ];
         let runner = RecordingRunner::new();
 
@@ -279,10 +324,20 @@ mod tests {
     fn run_phase_propagates_inline_failure_and_stops() {
         struct FailingRunner;
         impl HookRunner for FailingRunner {
-            fn run_inline(&self, _command: &str, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+            fn run_inline(
+                &self,
+                _command: &str,
+                _cwd: &Path,
+                _env: &BTreeMap<String, String>,
+            ) -> Result<()> {
                 anyhow::bail!("boom")
             }
-            fn run_script_file(&self, _path: &Path, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+            fn run_script_file(
+                &self,
+                _path: &Path,
+                _cwd: &Path,
+                _env: &BTreeMap<String, String>,
+            ) -> Result<()> {
                 panic!("must not run script after inline failure");
             }
             fn run_rendered(

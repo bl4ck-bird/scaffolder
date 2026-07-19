@@ -3,15 +3,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::domain::answer::AnswerValue;
 use crate::domain::hook::{Hook, Hooks};
 use crate::domain::manifest::{Manifest, ManifestSource};
 use crate::domain::question::{
-    validate_choices, validate_question_name, validate_unique_names, Choice, Question,
-    QuestionType,
+    Choice, Question, QuestionType, validate_choices, validate_question_name, validate_unique_names,
 };
 use crate::infra::load::trust::ensure_within_root;
 use crate::infra::load::{toml_to_answer_value, toml_to_data_value};
@@ -312,7 +311,11 @@ mod tests {
         )
         .expect("write temp manifest");
 
-        let result = (TomlManifestSource { root_canon, trust: false }).load(&path);
+        let result = (TomlManifestSource {
+            root_canon,
+            trust: false,
+        })
+        .load(&path);
         fs::remove_file(&path).ok();
 
         let manifest = result.expect("manifest should load");
@@ -337,11 +340,18 @@ mod tests {
         let root = TempDir::new().unwrap();
         let root_canon = root.path().canonicalize().unwrap();
         let real = root.path().join("real.toml");
-        fs::write(&real, "[[questions]]\nname = \"license\"\ntype = \"string\"\n").unwrap();
+        fs::write(
+            &real,
+            "[[questions]]\nname = \"license\"\ntype = \"string\"\n",
+        )
+        .unwrap();
         let link = root.path().join("scaffold.toml");
         symlink(&real, &link).unwrap();
 
-        let source = TomlManifestSource { root_canon, trust: false };
+        let source = TomlManifestSource {
+            root_canon,
+            trust: false,
+        };
         let manifest = source.load(&link).expect("internal symlink must load");
         assert_eq!(manifest.questions[0].name, "license");
     }
@@ -355,11 +365,18 @@ mod tests {
         let root_canon = root.path().canonicalize().unwrap();
         let outside = TempDir::new().unwrap();
         let external = outside.path().join("scaffold.toml");
-        fs::write(&external, "[[questions]]\nname = \"license\"\ntype = \"string\"\n").unwrap();
+        fs::write(
+            &external,
+            "[[questions]]\nname = \"license\"\ntype = \"string\"\n",
+        )
+        .unwrap();
         let link = root.path().join("scaffold.toml");
         symlink(&external, &link).unwrap();
 
-        let source = TomlManifestSource { root_canon, trust: false };
+        let source = TomlManifestSource {
+            root_canon,
+            trust: false,
+        };
         assert!(source.load(&link).is_err());
     }
 
@@ -372,12 +389,21 @@ mod tests {
         let root_canon = root.path().canonicalize().unwrap();
         let outside = TempDir::new().unwrap();
         let external = outside.path().join("scaffold.toml");
-        fs::write(&external, "[[questions]]\nname = \"license\"\ntype = \"string\"\n").unwrap();
+        fs::write(
+            &external,
+            "[[questions]]\nname = \"license\"\ntype = \"string\"\n",
+        )
+        .unwrap();
         let link = root.path().join("scaffold.toml");
         symlink(&external, &link).unwrap();
 
-        let source = TomlManifestSource { root_canon, trust: true };
-        let manifest = source.load(&link).expect("trusted external symlink must load");
+        let source = TomlManifestSource {
+            root_canon,
+            trust: true,
+        };
+        let manifest = source
+            .load(&link)
+            .expect("trusted external symlink must load");
         assert_eq!(manifest.questions[0].name, "license");
     }
 

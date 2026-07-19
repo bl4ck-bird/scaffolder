@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use crate::app::pipeline::{apply, ApplyPorts, ApplyRequest};
+use crate::app::pipeline::{ApplyPorts, ApplyRequest, apply};
 use crate::app::report::format_plan;
 use crate::cli::confirm::StdConfirmer;
 use crate::cli::prompt::InquireAnswerSource;
@@ -15,13 +15,13 @@ use crate::domain::answer::ScaffolderBuiltins;
 use crate::domain::place::normalize_target;
 use crate::domain::render::PartialSource;
 use crate::domain::store::{SourceRootSource, TemplateStore};
+use crate::infra::hook::{FsHookSource, StdHookRunner};
 use crate::infra::load::answers::load_answers_file;
 use crate::infra::load::data::FsDataSource;
 use crate::infra::load::ignore::FsIgnoreSource;
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::load::partials::FsPartialSource;
 use crate::infra::load::source_root::FsSourceRootSource;
-use crate::infra::hook::{FsHookSource, StdHookRunner};
 use crate::infra::load::store::FsTemplateStore;
 use crate::infra::load::trust::ensure_within_root;
 use crate::infra::place::FsPayloadStore;
@@ -84,9 +84,12 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     // partials·data·ignore)은 실효 루트를 기준으로 한다.
     let template_root = FsSourceRootSource.resolve(&template_root)?;
     // 이후 모든 로더 읽기 지점의 외부 심링크 가드는 이 실효 루트 기준이다.
-    let root_canon = template_root
-        .canonicalize()
-        .with_context(|| format!("failed to resolve template root {}", template_root.display()))?;
+    let root_canon = template_root.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve template root {}",
+            template_root.display()
+        )
+    })?;
     let trust = args.trust;
     // 실효 target을 합성 루트에서 한 번 확정한다: `std::path::absolute`는 `..`를 lexical로 보존하므로,
     // 곧바로 정규화해 이후 모든 소비자(훅 cwd·dest_status·write_file·ensure_target·cleanup_target)가
@@ -197,7 +200,8 @@ mod tests {
 
     #[test]
     fn parse_answers_splits_key_value_pairs() {
-        let parsed = parse_answers(&["project=demo".to_string(), "license=MIT".to_string()]).unwrap();
+        let parsed =
+            parse_answers(&["project=demo".to_string(), "license=MIT".to_string()]).unwrap();
         assert_eq!(parsed.get("project"), Some(&"demo".to_string()));
         assert_eq!(parsed.get("license"), Some(&"MIT".to_string()));
     }

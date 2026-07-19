@@ -3,9 +3,9 @@
 
 use std::collections::HashSet;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use crate::domain::answer::{canonical_string, AnswerValue};
+use crate::domain::answer::{AnswerValue, canonical_string};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionType {

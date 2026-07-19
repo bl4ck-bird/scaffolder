@@ -7,19 +7,21 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::app::hooks::{collect_active_inline, confirm_description, run_phase};
 use crate::domain::answer::{
-    build_context, coerce, validate_choice, AnswerContext, AnswerSource, AnswerValue,
-    ConditionEvaluator, ScaffolderBuiltins,
+    AnswerContext, AnswerSource, AnswerValue, ConditionEvaluator, ScaffolderBuiltins,
+    build_context, coerce, validate_choice,
 };
 use crate::domain::data::DataSource;
-use crate::domain::hook::{hook_env, Confirmer, Hook, HookPhase, HookRunner, HookScript, HookSource};
+use crate::domain::hook::{
+    Confirmer, Hook, HookPhase, HookRunner, HookScript, HookSource, hook_env,
+};
 use crate::domain::ignore::{IgnoreMatcher, IgnoreSource};
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
-use crate::domain::place::{safe_rel_path, FileMode, PayloadStore, RelPath, TargetPreparation};
+use crate::domain::place::{FileMode, PayloadStore, RelPath, TargetPreparation, safe_rel_path};
 use crate::domain::question::Question;
 use crate::domain::render::Renderer;
 
@@ -94,7 +96,11 @@ impl CollectedHooks<'_> {
     }
 }
 
-pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts) -> Result<ApplyReport> {
+pub fn apply(
+    req: &ApplyRequest,
+    builtins: ScaffolderBuiltins,
+    ports: ApplyPorts,
+) -> Result<ApplyReport> {
     let manifest_path = req.template_root.join("scaffold.toml");
     let manifest = ports.manifest_src.load(&manifest_path)?;
 
@@ -128,10 +134,22 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
 
     // dry-run 이후에만 훅을 수집한다 — dry-run은 훅과 무관하다.
     let hooks = CollectedHooks {
-        before_inline: collect_active_inline(&manifest.hooks.before, &ctx, ports.condition_evaluator)?,
-        after_inline: collect_active_inline(&manifest.hooks.after, &ctx, ports.condition_evaluator)?,
-        before_scripts: ports.hook_source.scripts(&req.template_root, HookPhase::Before)?,
-        after_scripts: ports.hook_source.scripts(&req.template_root, HookPhase::After)?,
+        before_inline: collect_active_inline(
+            &manifest.hooks.before,
+            &ctx,
+            ports.condition_evaluator,
+        )?,
+        after_inline: collect_active_inline(
+            &manifest.hooks.after,
+            &ctx,
+            ports.condition_evaluator,
+        )?,
+        before_scripts: ports
+            .hook_source
+            .scripts(&req.template_root, HookPhase::Before)?,
+        after_scripts: ports
+            .hook_source
+            .scripts(&req.template_root, HookPhase::After)?,
     };
 
     // before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
@@ -173,7 +191,10 @@ fn plan_writes(
 
         let out_rel_str = match entry.rel.as_path().parent() {
             Some(parent) if parent.as_os_str().is_empty() => parsed.output_base.clone(),
-            Some(parent) => parent.join(&parsed.output_base).to_string_lossy().into_owned(),
+            Some(parent) => parent
+                .join(&parsed.output_base)
+                .to_string_lossy()
+                .into_owned(),
             None => parsed.output_base.clone(),
         };
         if matcher.is_ignored(std::path::Path::new(&out_rel_str)) {
@@ -187,8 +208,12 @@ fn plan_writes(
 
         let raw = ports.payload.read_content(&files_root, entry)?;
         let content = if parsed.render {
-            let text = String::from_utf8(raw)
-                .map_err(|_| anyhow::anyhow!("entry {} is not valid UTF-8 but is marked for rendering", entry.rel))?;
+            let text = String::from_utf8(raw).map_err(|_| {
+                anyhow::anyhow!(
+                    "entry {} is not valid UTF-8 but is marked for rendering",
+                    entry.rel
+                )
+            })?;
             ports.renderer.render_str(&text, ctx)?.into_bytes()
         } else {
             raw
@@ -227,7 +252,9 @@ fn execute_side_effects(
     )?;
 
     for planned_write in planned {
-        let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
+        let status = ports
+            .payload
+            .dest_status(&req.target_root, &planned_write.rel)?;
 
         // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
         // 계속한다(overwrite와 달리 hard-fail이 아니다).
@@ -368,7 +395,9 @@ fn resolve_answers(
     }
     for key in answers_file.keys() {
         if !known.contains(key.as_str()) && warned.insert(key.as_str()) {
-            eprintln!("warning: '--answers-file' key '{key}' does not match any question; ignoring");
+            eprintln!(
+                "warning: '--answers-file' key '{key}' does not match any question; ignoring"
+            );
         }
     }
 
@@ -383,8 +412,8 @@ mod tests {
     use crate::domain::ignore::IgnoreMatcher;
     use crate::domain::manifest::Manifest;
     use crate::domain::place::{DestStatus, PayloadEntry};
-    use std::cell::RefCell;
     use crate::domain::question::QuestionType;
+    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -468,16 +497,30 @@ mod tests {
     }
     impl FakeHookRunner {
         fn new() -> Self {
-            Self { calls: RefCell::new(Vec::new()) }
+            Self {
+                calls: RefCell::new(Vec::new()),
+            }
         }
     }
     impl HookRunner for FakeHookRunner {
-        fn run_inline(&self, command: &str, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+        fn run_inline(
+            &self,
+            command: &str,
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
             self.calls.borrow_mut().push(format!("inline:{command}"));
             Ok(())
         }
-        fn run_script_file(&self, path: &Path, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
-            self.calls.borrow_mut().push(format!("script:{}", path.display()));
+        fn run_script_file(
+            &self,
+            path: &Path,
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(format!("script:{}", path.display()));
             Ok(())
         }
         fn run_rendered(
@@ -495,10 +538,20 @@ mod tests {
     /// before/after 훅 실행이 실패하는 상황을 주입하는 테스트용 `HookRunner`(정리 가드 검증용).
     struct FailingHookRunner;
     impl HookRunner for FailingHookRunner {
-        fn run_inline(&self, _command: &str, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+        fn run_inline(
+            &self,
+            _command: &str,
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
             bail!("simulated hook failure")
         }
-        fn run_script_file(&self, _path: &Path, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+        fn run_script_file(
+            &self,
+            _path: &Path,
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
             bail!("simulated hook failure")
         }
         fn run_rendered(
@@ -521,19 +574,25 @@ mod tests {
     }
     impl FakeAnswerSource {
         fn returning(value: AnswerValue) -> Self {
-            Self { value: Some(value), called: RefCell::new(false) }
+            Self {
+                value: Some(value),
+                called: RefCell::new(false),
+            }
         }
 
         fn unreachable() -> Self {
-            Self { value: None, called: RefCell::new(false) }
+            Self {
+                value: None,
+                called: RefCell::new(false),
+            }
         }
     }
     impl AnswerSource for FakeAnswerSource {
         fn ask(&self, question: &Question) -> Result<AnswerValue> {
             *self.called.borrow_mut() = true;
-            self.value
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("ask should not have been called for '{}'", question.name))
+            self.value.clone().ok_or_else(|| {
+                anyhow::anyhow!("ask should not have been called for '{}'", question.name)
+            })
         }
     }
 
@@ -545,7 +604,10 @@ mod tests {
     }
     impl FakeConditionEvaluator {
         fn always(active: bool) -> Self {
-            Self { default: active, overrides: HashMap::new() }
+            Self {
+                default: active,
+                overrides: HashMap::new(),
+            }
         }
     }
     impl ConditionEvaluator for FakeConditionEvaluator {
@@ -599,7 +661,11 @@ mod tests {
         }
 
         fn read_content(&self, _source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>> {
-            Ok(self.contents.get(&entry.rel.to_string()).cloned().unwrap_or_default())
+            Ok(self
+                .contents
+                .get(&entry.rel.to_string())
+                .cloned()
+                .unwrap_or_default())
         }
 
         fn ensure_target(&self, _target_root: &Path) -> Result<TargetPreparation> {
@@ -630,7 +696,9 @@ mod tests {
             if self.write_fails {
                 bail!("simulated write failure");
             }
-            self.written.borrow_mut().push((rel.clone(), content.to_vec()));
+            self.written
+                .borrow_mut()
+                .push((rel.clone(), content.to_vec()));
             Ok(())
         }
 
@@ -659,11 +727,17 @@ mod tests {
     }
     impl FakeIgnoreSource {
         fn none() -> Self {
-            Self { ignored: Vec::new() }
+            Self {
+                ignored: Vec::new(),
+            }
         }
     }
     impl IgnoreSource for FakeIgnoreSource {
-        fn load(&self, _template_root: &Path, _ctx: &AnswerContext) -> Result<Box<dyn IgnoreMatcher>> {
+        fn load(
+            &self,
+            _template_root: &Path,
+            _ctx: &AnswerContext,
+        ) -> Result<Box<dyn IgnoreMatcher>> {
             Ok(Box::new(FakeIgnoreMatcher(self.ignored.clone())))
         }
     }
@@ -732,7 +806,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -756,8 +833,14 @@ mod tests {
         };
         let store = FakePayloadStore {
             entries: vec![
-                PayloadEntry { rel: safe_rel_path("README.md").unwrap(), is_dir: false },
-                PayloadEntry { rel: safe_rel_path("README.md.jinja").unwrap(), is_dir: false },
+                PayloadEntry {
+                    rel: safe_rel_path("README.md").unwrap(),
+                    is_dir: false,
+                },
+                PayloadEntry {
+                    rel: safe_rel_path("README.md.jinja").unwrap(),
+                    is_dir: false,
+                },
             ],
             contents: HashMap::from([
                 ("README.md".to_string(), b"verbatim".to_vec()),
@@ -794,7 +877,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -846,7 +932,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -878,7 +967,10 @@ mod tests {
             },
         );
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("linked/outside.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("linked/outside.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("linked/outside.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(dest_statuses),
             written: RefCell::new(Vec::new()),
@@ -911,7 +1003,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: false },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: false,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -941,7 +1036,10 @@ mod tests {
             },
         );
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(dest_statuses),
             written: RefCell::new(Vec::new()),
@@ -974,7 +1072,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: false, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: false,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -993,7 +1094,10 @@ mod tests {
         let mut raw = BTreeMap::new();
         raw.insert("project".to_string(), "from-cli".to_string());
         let mut file = BTreeMap::new();
-        file.insert("project".to_string(), AnswerValue::Text("from-file".to_string()));
+        file.insert(
+            "project".to_string(),
+            AnswerValue::Text("from-file".to_string()),
+        );
 
         let resolved = resolve_answers(
             &[question],
@@ -1009,7 +1113,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("from-cli".to_string())));
+        assert_eq!(
+            resolved.get("project"),
+            Some(&AnswerValue::Text("from-cli".to_string()))
+        );
     }
 
     #[test]
@@ -1017,7 +1124,10 @@ mod tests {
         let question = string_question("project", Some("default-val"));
         let raw = BTreeMap::new();
         let mut file = BTreeMap::new();
-        file.insert("project".to_string(), AnswerValue::Text("from-file".to_string()));
+        file.insert(
+            "project".to_string(),
+            AnswerValue::Text("from-file".to_string()),
+        );
 
         let resolved = resolve_answers(
             &[question],
@@ -1033,7 +1143,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("from-file".to_string())));
+        assert_eq!(
+            resolved.get("project"),
+            Some(&AnswerValue::Text("from-file".to_string()))
+        );
     }
 
     #[test]
@@ -1054,7 +1167,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("default-val".to_string())));
+        assert_eq!(
+            resolved.get("project"),
+            Some(&AnswerValue::Text("default-val".to_string()))
+        );
     }
 
     #[test]
@@ -1096,7 +1212,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("asked".to_string())));
+        assert_eq!(
+            resolved.get("project"),
+            Some(&AnswerValue::Text("asked".to_string()))
+        );
         assert!(*source.called.borrow(), "ask should have been called");
     }
 
@@ -1118,7 +1237,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("project"), Some(&AnswerValue::Text("default-val".to_string())));
+        assert_eq!(
+            resolved.get("project"),
+            Some(&AnswerValue::Text("default-val".to_string()))
+        );
     }
 
     #[test]
@@ -1149,7 +1271,10 @@ mod tests {
             name: "license".to_string(),
             qtype: QuestionType::Select,
             prompt: None,
-            choices: vec![Choice { label: "MIT".to_string(), value: AnswerValue::Text("MIT".to_string()) }],
+            choices: vec![Choice {
+                label: "MIT".to_string(),
+                value: AnswerValue::Text("MIT".to_string()),
+            }],
             default: None,
             when: None,
             help: None,
@@ -1217,7 +1342,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("feature"), Some(&AnswerValue::Text("on".to_string())));
+        assert_eq!(
+            resolved.get("feature"),
+            Some(&AnswerValue::Text("on".to_string()))
+        );
     }
 
     #[test]
@@ -1240,7 +1368,10 @@ mod tests {
         )
         .expect("resolve should succeed");
 
-        assert_eq!(resolved.get("feature"), Some(&AnswerValue::Text("fallback".to_string())));
+        assert_eq!(
+            resolved.get("feature"),
+            Some(&AnswerValue::Text("fallback".to_string()))
+        );
     }
 
     #[test]
@@ -1249,7 +1380,10 @@ mod tests {
         let mut raw = BTreeMap::new();
         raw.insert("feature".to_string(), "on".to_string());
         let mut file = BTreeMap::new();
-        file.insert("feature".to_string(), AnswerValue::Text("from-file".to_string()));
+        file.insert(
+            "feature".to_string(),
+            AnswerValue::Text("from-file".to_string()),
+        );
 
         let resolved = resolve_answers(
             &[question],
@@ -1291,7 +1425,10 @@ mod tests {
         .expect("resolve should succeed");
 
         assert_eq!(resolved.get("gate"), Some(&AnswerValue::Bool(true)));
-        assert_eq!(resolved.get("dependent"), Some(&AnswerValue::Text("chosen".to_string())));
+        assert_eq!(
+            resolved.get("dependent"),
+            Some(&AnswerValue::Text("chosen".to_string()))
+        );
     }
 
     #[test]
@@ -1317,7 +1454,10 @@ mod tests {
         .expect("resolve should succeed");
 
         assert_eq!(resolved.get("gate"), Some(&AnswerValue::Bool(false)));
-        assert_eq!(resolved.get("dependent"), Some(&AnswerValue::Text("fallback".to_string())));
+        assert_eq!(
+            resolved.get("dependent"),
+            Some(&AnswerValue::Text("fallback".to_string()))
+        );
     }
 
     #[test]
@@ -1350,13 +1490,19 @@ mod tests {
         let manifest = Manifest {
             questions: vec![],
             hooks: crate::domain::hook::Hooks {
-                before: vec![crate::domain::hook::Hook { when: None, run: "echo should-not-run".to_string() }],
+                before: vec![crate::domain::hook::Hook {
+                    when: None,
+                    run: "echo should-not-run".to_string(),
+                }],
                 after: vec![],
             },
             ..Default::default()
         };
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
@@ -1400,8 +1546,14 @@ mod tests {
         );
 
         assert!(result.is_err(), "declined hook confirm must abort");
-        assert!(store.written.borrow().is_empty(), "no write must happen before hook confirm");
-        assert!(runner.calls.borrow().is_empty(), "hook must not run when confirm is declined");
+        assert!(
+            store.written.borrow().is_empty(),
+            "no write must happen before hook confirm"
+        );
+        assert!(
+            runner.calls.borrow().is_empty(),
+            "hook must not run when confirm is declined"
+        );
     }
 
     #[test]
@@ -1409,7 +1561,10 @@ mod tests {
         let manifest = Manifest {
             questions: vec![],
             hooks: crate::domain::hook::Hooks {
-                before: vec![crate::domain::hook::Hook { when: None, run: "echo should-not-run".to_string() }],
+                before: vec![crate::domain::hook::Hook {
+                    when: None,
+                    run: "echo should-not-run".to_string(),
+                }],
                 after: vec![],
             },
             ..Default::default()
@@ -1461,7 +1616,10 @@ mod tests {
         .expect("dry-run must succeed even though hook confirm would be declined");
 
         assert!(report.planned.is_empty());
-        assert!(runner.calls.borrow().is_empty(), "dry-run must not execute hooks");
+        assert!(
+            runner.calls.borrow().is_empty(),
+            "dry-run must not execute hooks"
+        );
     }
 
     // --- 실패 시 target 정리 가드 ---
@@ -1480,7 +1638,10 @@ mod tests {
             },
         );
         FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(dest_statuses),
             written: RefCell::new(Vec::new()),
@@ -1509,7 +1670,10 @@ mod tests {
     }
 
     fn empty_manifest() -> Manifest {
-        Manifest { questions: vec![], ..Default::default() }
+        Manifest {
+            questions: vec![],
+            ..Default::default()
+        }
     }
 
     /// 정리 가드 테스트용 apply 실행: overwrite 거부(post-prepare 실패)를 유발하고 결과를 반환한다.
@@ -1526,7 +1690,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: store,
-                confirmer: &FakeConfirmer { overwrite: false, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: false,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1549,8 +1716,14 @@ mod tests {
             &store,
         );
         let err = out.expect_err("guard must propagate the original error");
-        assert!(err.to_string().contains("original boom"), "original error must survive: {err}");
-        assert!(*store.cleaned.borrow(), "created target must be cleaned when enabled");
+        assert!(
+            err.to_string().contains("original boom"),
+            "original error must survive: {err}"
+        );
+        assert!(
+            *store.cleaned.borrow(),
+            "created target must be cleaned when enabled"
+        );
         assert_eq!(
             store.cleaned_path.borrow().as_deref(),
             Some(req.target_root.as_path()),
@@ -1568,7 +1741,10 @@ mod tests {
             &store,
         );
         assert!(out.is_err());
-        assert!(!*store.cleaned.borrow(), "pre-existing target must never be cleaned");
+        assert!(
+            !*store.cleaned.borrow(),
+            "pre-existing target must never be cleaned"
+        );
     }
 
     #[test]
@@ -1581,7 +1757,10 @@ mod tests {
             &store,
         );
         assert!(out.is_err());
-        assert!(!*store.cleaned.borrow(), "--no-cleanup-on-failure must preserve the target");
+        assert!(
+            !*store.cleaned.borrow(),
+            "--no-cleanup-on-failure must preserve the target"
+        );
     }
 
     #[test]
@@ -1619,7 +1798,10 @@ mod tests {
         // 실제 write_file I/O 실패를 주입한다(overwrite 거부 대리가 아님). 또한 정리가 정확히
         // 준비된 target root 경로로 호출되는지 검증한다.
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
@@ -1641,7 +1823,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1650,7 +1835,10 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        assert!(*store.cleaned.borrow(), "created target must be cleaned up on write I/O failure");
+        assert!(
+            *store.cleaned.borrow(),
+            "created target must be cleaned up on write I/O failure"
+        );
         assert_eq!(
             store.cleaned_path.borrow().as_deref(),
             Some(req.target_root.as_path()),
@@ -1662,7 +1850,10 @@ mod tests {
     fn created_target_is_cleaned_up_on_dest_status_failure() {
         // dest_status 오류도 post-prepare 실패 경로이므로 동일 정책(정리)을 받는다.
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
@@ -1683,7 +1874,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1692,7 +1886,10 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        assert!(*store.cleaned.borrow(), "dest_status failure must also trigger cleanup");
+        assert!(
+            *store.cleaned.borrow(),
+            "dest_status failure must also trigger cleanup"
+        );
     }
 
     #[test]
@@ -1700,7 +1897,10 @@ mod tests {
         let manifest = Manifest {
             questions: vec![],
             hooks: crate::domain::hook::Hooks {
-                before: vec![crate::domain::hook::Hook { when: None, run: "boom".to_string() }],
+                before: vec![crate::domain::hook::Hook {
+                    when: None,
+                    run: "boom".to_string(),
+                }],
                 after: vec![],
             },
             ..Default::default()
@@ -1727,7 +1927,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1736,7 +1939,10 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        assert!(*store.cleaned.borrow(), "created target must be cleaned up when before-hook fails");
+        assert!(
+            *store.cleaned.borrow(),
+            "created target must be cleaned up when before-hook fails"
+        );
     }
 
     #[test]
@@ -1746,14 +1952,20 @@ mod tests {
             questions: vec![],
             hooks: crate::domain::hook::Hooks {
                 before: vec![],
-                after: vec![crate::domain::hook::Hook { when: None, run: "boom".to_string() }],
+                after: vec![crate::domain::hook::Hook {
+                    when: None,
+                    run: "boom".to_string(),
+                }],
             },
             ..Default::default()
         };
         // payload를 실제로 배치(write 성공)한 뒤 after-hook에서 실패시켜, "완성된 산출물까지
         // 포함해" target이 정리됨을 증명한다.
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
@@ -1774,7 +1986,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1783,8 +1998,14 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        assert!(!store.written.borrow().is_empty(), "write must have completed before after-hook");
-        assert!(*store.cleaned.borrow(), "created target must be cleaned up when after-hook fails");
+        assert!(
+            !store.written.borrow().is_empty(),
+            "write must have completed before after-hook"
+        );
+        assert!(
+            *store.cleaned.borrow(),
+            "created target must be cleaned up when after-hook fails"
+        );
     }
 
     #[test]
@@ -1792,7 +2013,10 @@ mod tests {
         let store = overwrite_conflict_store(TargetPreparation::Existing, false);
         let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(true));
         assert!(result.is_err());
-        assert!(!*store.cleaned.borrow(), "pre-existing target must never be cleaned up");
+        assert!(
+            !*store.cleaned.borrow(),
+            "pre-existing target must never be cleaned up"
+        );
     }
 
     #[test]
@@ -1800,7 +2024,10 @@ mod tests {
         let store = overwrite_conflict_store(TargetPreparation::Created, false);
         let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(false));
         assert!(result.is_err());
-        assert!(!*store.cleaned.borrow(), "--no-cleanup-on-failure must preserve the target");
+        assert!(
+            !*store.cleaned.borrow(),
+            "--no-cleanup-on-failure must preserve the target"
+        );
     }
 
     #[test]
@@ -1816,7 +2043,10 @@ mod tests {
             },
         );
         let store = FakePayloadStore {
-            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            entries: vec![PayloadEntry {
+                rel: safe_rel_path("file.txt").unwrap(),
+                is_dir: false,
+            }],
             contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(dest_statuses),
             written: RefCell::new(Vec::new()),
@@ -1837,7 +2067,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1846,7 +2079,10 @@ mod tests {
             },
         );
         assert!(result.is_ok());
-        assert!(!*store.cleaned.borrow(), "successful apply must not clean up");
+        assert!(
+            !*store.cleaned.borrow(),
+            "successful apply must not clean up"
+        );
     }
 
     #[test]
@@ -1891,7 +2127,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1900,8 +2139,14 @@ mod tests {
             },
         );
         assert!(result.is_err());
-        assert!(!*store.prepared.borrow(), "ensure_target must not be called on pre-prepare failure");
-        assert!(!*store.cleaned.borrow(), "pre-prepare failure must not trigger cleanup");
+        assert!(
+            !*store.prepared.borrow(),
+            "ensure_target must not be called on pre-prepare failure"
+        );
+        assert!(
+            !*store.cleaned.borrow(),
+            "pre-prepare failure must not trigger cleanup"
+        );
     }
 
     #[test]
@@ -1929,7 +2174,10 @@ mod tests {
                 data_source: &FakeDataSource,
                 renderer: &FakeRenderer,
                 payload: &store,
-                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                confirmer: &FakeConfirmer {
+                    overwrite: true,
+                    external: true,
+                },
                 answer_source: &FakeAnswerSource::unreachable(),
                 condition_evaluator: &FakeConditionEvaluator::always(true),
                 ignore_source: &FakeIgnoreSource::none(),
@@ -1939,6 +2187,9 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(*store.prepared.borrow(), "ensure_target was attempted");
-        assert!(!*store.cleaned.borrow(), "prepare failure must not trigger cleanup");
+        assert!(
+            !*store.cleaned.borrow(),
+            "prepare failure must not trigger cleanup"
+        );
     }
 }

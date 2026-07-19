@@ -1,5 +1,6 @@
 # AI harness — local agent context, not committed
 .ai-harness/
+.claude/
 AGENTS.md
 CLAUDE.md
 GEMINI.md

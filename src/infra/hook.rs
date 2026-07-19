@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::domain::hook::{HookPhase, HookRunner, HookScript, HookSource};
 use crate::infra::load::trust::ensure_within_root;
@@ -31,7 +31,12 @@ impl HookRunner for StdHookRunner {
         Ok(())
     }
 
-    fn run_script_file(&self, path: &Path, cwd: &Path, env: &BTreeMap<String, String>) -> Result<()> {
+    fn run_script_file(
+        &self,
+        path: &Path,
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+    ) -> Result<()> {
         // `path`가 상대(상대 template root에서 유래)면 `Command::current_dir(cwd)`가 exec 전
         // child cwd로 chdir하는 순서는 플랫폼 의존적이라, 상대 program 경로가 `cwd`(target) 기준
         // ENOENT로 해석될 수 있다. 절대화는 이 프로세스의 실제 cwd(상대 template 인자의 기준)로
@@ -107,8 +112,8 @@ impl TempScript {
         let mut last_err = None;
         for _ in 0..MAX_ATTEMPTS {
             let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("scaffolder-hook-{pid}-{counter}-{sanitized}"));
+            let path =
+                std::env::temp_dir().join(format!("scaffolder-hook-{pid}-{counter}-{sanitized}"));
 
             let open_result = fs::OpenOptions::new()
                 .write(true)
@@ -214,8 +219,9 @@ impl HookSource for FsHookSource {
                 Ok(meta) if meta.is_file() => {}
                 Ok(_) => continue,
                 Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("failed to stat {} (broken symlink?)", path.display()));
+                    return Err(e).with_context(|| {
+                        format!("failed to stat {} (broken symlink?)", path.display())
+                    });
                 }
             }
             let name = entry
@@ -301,7 +307,10 @@ mod tests {
             .expect("read temp_dir")
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().contains("scaffolder-hook-"));
-        assert!(!leftover, "no scaffolder-hook temp file should remain after success");
+        assert!(
+            !leftover,
+            "no scaffolder-hook temp file should remain after success"
+        );
     }
 
     #[test]
@@ -317,7 +326,10 @@ mod tests {
             .expect("read temp_dir")
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().contains("scaffolder-hook-"));
-        assert!(!leftover, "no scaffolder-hook temp file should remain after failure");
+        assert!(
+            !leftover,
+            "no scaffolder-hook temp file should remain after failure"
+        );
     }
 
     #[test]
@@ -326,7 +338,8 @@ mod tests {
         // 파일 자체를 직접 만들어 모드를 확인한다(exec은 이 테스트의 관심사가 아니다). temp
         // 파일이 살아있는 동안 다른 temp-dir 스캔 테스트와 겹치지 않도록 같은 lock을 공유한다.
         let _guard = TEMP_DIR_SCAN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let temp = super::TempScript::create("mode-check.sh", b"#!/bin/sh\ntrue\n").expect("create");
+        let temp =
+            super::TempScript::create("mode-check.sh", b"#!/bin/sh\ntrue\n").expect("create");
         let meta = fs::metadata(temp.path()).expect("metadata");
         assert_eq!(meta.permissions().mode() & 0o777, 0o700);
     }
@@ -513,7 +526,7 @@ mod tests {
 
     #[test]
     fn scripts_follows_internal_symlink_to_file_and_includes_it() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::os::unix::fs::{PermissionsExt, symlink};
 
         let root = tempfile::tempdir().expect("tempdir");
         let before = root.path().join("hooks/before");
@@ -546,12 +559,15 @@ mod tests {
         symlink(root.path().join("nowhere"), before.join("01-broken.sh")).expect("symlink hook");
 
         let result = hook_source(root.path()).scripts(root.path(), HookPhase::Before);
-        assert!(result.is_err(), "broken symlink hook must be a fail-loud error");
+        assert!(
+            result.is_err(),
+            "broken symlink hook must be a fail-loud error"
+        );
     }
 
     #[test]
     fn scripts_rejects_external_symlink_without_trust() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::os::unix::fs::{PermissionsExt, symlink};
 
         let root = tempfile::tempdir().expect("tempdir");
         let before = root.path().join("hooks/before");
@@ -570,7 +586,7 @@ mod tests {
 
     #[test]
     fn scripts_allows_external_symlink_with_trust() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::os::unix::fs::{PermissionsExt, symlink};
 
         let root = tempfile::tempdir().expect("tempdir");
         let before = root.path().join("hooks/before");
@@ -613,7 +629,7 @@ mod tests {
 
     #[test]
     fn scripts_allows_external_symlink_phase_dir_with_trust() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::os::unix::fs::{PermissionsExt, symlink};
 
         let root = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(root.path().join("hooks")).expect("mkdir hooks");

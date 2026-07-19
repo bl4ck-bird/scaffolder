@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Args;
 
 use crate::domain::skeleton::skeleton;
-use crate::domain::store::{validate_template_name, TemplateInitializer};
+use crate::domain::store::{TemplateInitializer, validate_template_name};
 use crate::infra::load::store::FsTemplateStore;
 
 #[derive(Debug, Args)]

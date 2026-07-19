@@ -1,15 +1,15 @@
 //! 템플릿·스토어 로딩 어댑터.
 
-pub mod manifest;
-pub mod store;
-pub mod source_root;
+pub mod answers;
 pub mod data;
 pub mod ignore;
-pub mod answers;
+pub mod manifest;
 pub mod partials;
+pub mod source_root;
+pub mod store;
 pub mod trust;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::domain::answer::AnswerValue;
 use crate::domain::data::DataValue;

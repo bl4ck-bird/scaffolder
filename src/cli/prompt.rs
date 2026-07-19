@@ -1,9 +1,9 @@
 //! `inquire` 타입별 위젯 — `AnswerSource`.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use inquire::{Confirm, MultiSelect, Select, Text};
 
-use crate::domain::answer::{coerce, validate_choice, AnswerSource, AnswerValue};
+use crate::domain::answer::{AnswerSource, AnswerValue, coerce, validate_choice};
 use crate::domain::question::{Question, QuestionType};
 
 /// tty 대화형 `AnswerSource`. 취소·입력 에러는 anyhow context와 함께 전파한다.

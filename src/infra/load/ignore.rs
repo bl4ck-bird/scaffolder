@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::domain::answer::AnswerContext;
@@ -24,7 +24,11 @@ pub struct FsIgnoreSource<'a> {
 
 impl<'a> FsIgnoreSource<'a> {
     pub fn new(renderer: &'a dyn Renderer, root_canon: PathBuf, trust: bool) -> Self {
-        Self { renderer, root_canon, trust }
+        Self {
+            renderer,
+            root_canon,
+            trust,
+        }
     }
 }
 
@@ -99,7 +103,7 @@ impl IgnoreMatcher for GitignoreMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::answer::{build_context, ScaffolderBuiltins};
+    use crate::domain::answer::{ScaffolderBuiltins, build_context};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -116,8 +120,15 @@ mod tests {
 
     fn ctx_with_stacks(stacks: Vec<String>) -> AnswerContext {
         let mut answers = BTreeMap::new();
-        answers.insert("stacks".to_string(), crate::domain::answer::AnswerValue::List(stacks));
-        build_context(answers, Some(crate::domain::data::DataValue::empty_table()), builtins())
+        answers.insert(
+            "stacks".to_string(),
+            crate::domain::answer::AnswerValue::List(stacks),
+        );
+        build_context(
+            answers,
+            Some(crate::domain::data::DataValue::empty_table()),
+            builtins(),
+        )
     }
 
     struct NoopRenderer;

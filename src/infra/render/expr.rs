@@ -1,11 +1,11 @@
 //! `when` 조건식 평가(strict undefined) — `ConditionEvaluator`.
 
-use anyhow::{bail, Context as _, Result};
-use minijinja::value::Value as JinjaValue;
+use anyhow::{Context as _, Result, bail};
 use minijinja::Environment;
+use minijinja::value::Value as JinjaValue;
 
 use crate::domain::answer::{AnswerContext, ConditionEvaluator};
-use crate::infra::render::render::{base_environment, RenderContext};
+use crate::infra::render::render::{RenderContext, base_environment};
 
 /// MiniJinja 기반 `ConditionEvaluator`. render.rs와 동일한 strict undefined + `env()` 설정을
 /// 공유한다.
@@ -50,7 +50,7 @@ impl ConditionEvaluator for MiniJinjaConditionEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::answer::{build_context, AnswerValue, ScaffolderBuiltins};
+    use crate::domain::answer::{AnswerValue, ScaffolderBuiltins, build_context};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -131,7 +131,15 @@ mod tests {
         let ctx = ctx_with("edition", AnswerValue::Int(2021));
         let evaluator = MiniJinjaConditionEvaluator::new();
 
-        assert!(evaluator.is_active("scaffolder.os == 'macos'", &ctx).unwrap());
-        assert!(evaluator.is_active("env('SC_DEFINITELY_ABSENT') == ''", &ctx).unwrap());
+        assert!(
+            evaluator
+                .is_active("scaffolder.os == 'macos'", &ctx)
+                .unwrap()
+        );
+        assert!(
+            evaluator
+                .is_active("env('SC_DEFINITELY_ABSENT') == ''", &ctx)
+                .unwrap()
+        );
     }
 }

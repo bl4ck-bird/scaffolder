@@ -2,5 +2,5 @@
 
 pub mod hooks;
 pub mod pipeline;
-pub mod validate;
 pub mod report;
+pub mod validate;

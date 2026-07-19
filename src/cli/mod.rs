@@ -2,5 +2,5 @@
 
 pub mod command;
 pub mod commands;
-pub mod prompt;
 pub mod confirm;
+pub mod prompt;

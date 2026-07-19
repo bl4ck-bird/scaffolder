@@ -87,13 +87,21 @@ mod tests {
     #[test]
     fn simple_skeleton_has_manifest_files_dir_and_sample() {
         let entries = skeleton(false);
-        assert!(entries
-            .iter()
-            .any(|e| e.rel == "scaffold.toml" && e.content.is_some()));
-        assert!(entries.iter().any(|e| e.rel == "files" && e.content.is_none()));
-        assert!(entries
-            .iter()
-            .any(|e| e.rel == "files/README.md.jinja" && e.content.is_some()));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.rel == "scaffold.toml" && e.content.is_some())
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.rel == "files" && e.content.is_none())
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.rel == "files/README.md.jinja" && e.content.is_some())
+        );
     }
 
     #[test]
@@ -164,7 +172,11 @@ mod tests {
         for entries in [skeleton(false), skeleton(true)] {
             let mut seen = HashSet::new();
             for entry in &entries {
-                assert!(seen.insert(entry.rel.clone()), "duplicate rel {:?}", entry.rel);
+                assert!(
+                    seen.insert(entry.rel.clone()),
+                    "duplicate rel {:?}",
+                    entry.rel
+                );
             }
         }
     }
@@ -174,7 +186,11 @@ mod tests {
         for entries in [skeleton(false), skeleton(true)] {
             for entry in &entries {
                 if let Some(content) = entry.content {
-                    assert!(!content.is_empty(), "file entry {:?} has empty content", entry.rel);
+                    assert!(
+                        !content.is_empty(),
+                        "file entry {:?} has empty content",
+                        entry.rel
+                    );
                 }
             }
         }

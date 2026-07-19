@@ -4,7 +4,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::domain::store::SourceRootSource;
 
@@ -49,10 +49,7 @@ impl SourceRootSource for FsSourceRootSource {
         if sub.is_absolute() {
             bail!(".scaffoldroot {subpath:?} must be a relative subpath, not absolute");
         }
-        if sub
-            .components()
-            .any(|c| matches!(c, Component::ParentDir))
-        {
+        if sub.components().any(|c| matches!(c, Component::ParentDir)) {
             bail!(".scaffoldroot {subpath:?} must not contain `..`");
         }
 

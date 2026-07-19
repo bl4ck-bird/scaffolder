@@ -2,8 +2,8 @@
 //! 로더가 읽기 지점에서 호출한다 — pre-flight 스캔이 아니라 접근 지점 검사(파수꾼==실행자)라
 //! 스캔↔읽기 TOCTOU 창이 없다.
 
+use anyhow::{Context, Result, bail};
 use std::path::Path;
-use anyhow::{bail, Context, Result};
 
 /// `path`의 canonical 경로가 `root_canon` 밖이면(source root 이탈) `trust`가 아닌 한 거부한다.
 /// broken 심링크(canonicalize 실패)도 에러. copier `ForbiddenPathError` 패턴.

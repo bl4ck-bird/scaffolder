@@ -76,7 +76,9 @@ pub struct MiniJinjaSyntaxChecker {
 
 impl MiniJinjaSyntaxChecker {
     pub fn new() -> Self {
-        Self { env: base_environment() }
+        Self {
+            env: base_environment(),
+        }
     }
 }
 
@@ -295,7 +297,11 @@ mod tests {
     fn syntax_checker_does_not_error_on_undefined_variable_reference() {
         // 파스 단계는 strict-undefined를 적용하지 않는다 — 런타임 미정의는 검사 대상이 아니다.
         let checker = MiniJinjaSyntaxChecker::new();
-        assert!(checker.check_template("{{ totally_undefined_var }}").is_ok());
+        assert!(
+            checker
+                .check_template("{{ totally_undefined_var }}")
+                .is_ok()
+        );
     }
 
     #[test]

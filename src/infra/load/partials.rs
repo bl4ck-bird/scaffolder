@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use crate::domain::render::PartialSource;
 use crate::infra::load::trust::ensure_within_root;
@@ -28,9 +28,9 @@ impl PartialSource for FsPartialSource {
         // 되가리키는 진짜 cycle을 첫 재진입에서 차단한다. 이 집합은 "현재 재귀 경로의 조상"만
         // 담는다(모든 방문 dir 누적이 아니다) — 그래야 diamond(서로 다른 두 심링크가 같은 내부
         // dir을 가리키는 것, cycle 아님)가 둘 다 순회된다.
-        let root_dir_canon = partials_dir
-            .canonicalize()
-            .with_context(|| format!("failed to resolve partials dir {}", partials_dir.display()))?;
+        let root_dir_canon = partials_dir.canonicalize().with_context(|| {
+            format!("failed to resolve partials dir {}", partials_dir.display())
+        })?;
         let mut ancestors = HashSet::new();
         ancestors.insert(root_dir_canon);
         collect(
@@ -53,8 +53,8 @@ fn collect(
     trust: bool,
     ancestors: &HashSet<PathBuf>,
 ) -> Result<()> {
-    let entries =
-        fs::read_dir(dir).with_context(|| format!("failed to read partials dir {}", dir.display()))?;
+    let entries = fs::read_dir(dir)
+        .with_context(|| format!("failed to read partials dir {}", dir.display()))?;
     for entry in entries {
         let entry = entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
         let path = entry.path();
@@ -77,9 +77,9 @@ fn collect(
             child_ancestors.insert(canon);
             collect(root, &path, out, root_canon, trust, &child_ancestors)?;
         } else {
-            let rel = path
-                .strip_prefix(root)
-                .with_context(|| format!("partial path {} escaped partials root", path.display()))?;
+            let rel = path.strip_prefix(root).with_context(|| {
+                format!("partial path {} escaped partials root", path.display())
+            })?;
             // 이름은 `{% include %}`에서 UTF-8 문자열로 참조되므로 비-UTF8 경로는 lossy 변환 시
             // 다른 파일과 같은 이름으로 축약돼 조용히 덮어쓸 수 있다 — fail-loud로 거부한다.
             let name = rel
@@ -118,7 +118,10 @@ mod tests {
 
         let loaded = source(dir.path()).load(dir.path()).unwrap();
 
-        assert_eq!(loaded.get("greeting").map(String::as_str), Some("hi {{ name }}"));
+        assert_eq!(
+            loaded.get("greeting").map(String::as_str),
+            Some("hi {{ name }}")
+        );
         assert_eq!(loaded.get("sub/inner").map(String::as_str), Some("nested"));
         assert_eq!(loaded.len(), 2);
     }
@@ -142,7 +145,10 @@ mod tests {
         symlink(&real, partials.join("greeting")).unwrap();
 
         let loaded = source(dir.path()).load(dir.path()).unwrap();
-        assert_eq!(loaded.get("greeting").map(String::as_str), Some("hi {{ name }}"));
+        assert_eq!(
+            loaded.get("greeting").map(String::as_str),
+            Some("hi {{ name }}")
+        );
     }
 
     #[test]

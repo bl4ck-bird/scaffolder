@@ -92,7 +92,10 @@ fn apply_template_dir_missing_store_name_fails_with_searched_locations() {
         .stderr(contains("ghost"))
         .stderr(contains(store_dir.path().to_str().expect("utf8 path")));
 
-    assert!(!target.exists(), "missing template must not create the target directory");
+    assert!(
+        !target.exists(),
+        "missing template must not create the target directory"
+    );
 }
 
 /// 회귀: bare 스토어 이름이 CWD의 동명 디렉토리에 가려지면 `--template-dir`가 조용히
@@ -248,7 +251,10 @@ fn apply_dry_run_does_not_write_and_prints_plan() {
 
     cmd.assert().success().stdout(contains("README.md"));
 
-    assert!(!target.exists(), "dry-run must not create the target directory");
+    assert!(
+        !target.exists(),
+        "dry-run must not create the target directory"
+    );
 }
 
 /// `project`(default 있음)/`port`(int, default 없음)/`verbose`(bool, default 있음) 질문과
@@ -490,7 +496,8 @@ fn write_when_template(dir: &std::path::Path) {
 
     let files = dir.join("files");
     fs::create_dir_all(&files).expect("mkdir files");
-    fs::write(files.join("config.txt.jinja"), "private={{ private }}").expect("write config.txt.jinja");
+    fs::write(files.join("config.txt.jinja"), "private={{ private }}")
+        .expect("write config.txt.jinja");
 }
 
 #[test]
@@ -631,7 +638,10 @@ fn apply_static_scaffoldignore_excludes_matching_output_paths() {
 
     cmd.assert().success();
 
-    assert!(target.join("keep.txt").exists(), "non-ignored file must be written");
+    assert!(
+        target.join("keep.txt").exists(),
+        "non-ignored file must be written"
+    );
     assert!(
         !target.join("scratch.tmp").exists(),
         "ignored file must not be written"
@@ -669,7 +679,10 @@ fn apply_jinja_scaffoldignore_excludes_output_path_based_on_answers() {
     let target = workdir.path().join("demo");
 
     let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
-    cmd.current_dir(workdir.path()).arg("apply").arg(template.path()).arg(&target);
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target);
     cmd.assert().success();
     assert!(
         !target.join("Dockerfile").exists(),
@@ -721,7 +734,10 @@ fn apply_scaffoldignore_matches_rendered_output_name_not_source_name() {
         !target.join("config.tmp").exists(),
         "output name config.tmp must be excluded by *.tmp even though source is config.tmp.jinja"
     );
-    assert!(target.join("keep.txt").exists(), "non-ignored file must be written");
+    assert!(
+        target.join("keep.txt").exists(),
+        "non-ignored file must be written"
+    );
 }
 
 #[test]
@@ -749,7 +765,10 @@ fn apply_dry_run_omits_ignored_files_from_plan_output() {
         .stdout(contains("keep.txt"))
         .stdout(contains("scratch.tmp").not());
 
-    assert!(!target.exists(), "dry-run must not create the target directory");
+    assert!(
+        !target.exists(),
+        "dry-run must not create the target directory"
+    );
 }
 
 #[test]
@@ -799,11 +818,8 @@ fn apply_include_of_unregistered_partial_fails() {
     let files = template.path().join("files");
     fs::create_dir_all(&files).expect("mkdir files");
     // `partials/` 밖(또는 미등록) 이름 include는 등록 템플릿 조회에 실패해 렌더 에러.
-    fs::write(
-        files.join("out.txt.jinja"),
-        "{% include \"../escape\" %}",
-    )
-    .expect("write out.txt.jinja");
+    fs::write(files.join("out.txt.jinja"), "{% include \"../escape\" %}")
+        .expect("write out.txt.jinja");
 
     let workdir = tempfile::tempdir().expect("workdir tempdir");
     let target = workdir.path().join("demo");
@@ -872,7 +888,11 @@ fn apply_dedup_lines_over_included_partial() {
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
     let partials = template.path().join("partials");
     fs::create_dir_all(&partials).expect("mkdir partials");
-    fs::write(partials.join("gitignore-docker"), "/target\n/docker-artifacts").expect("write partial");
+    fs::write(
+        partials.join("gitignore-docker"),
+        "/target\n/docker-artifacts",
+    )
+    .expect("write partial");
     let files = template.path().join("files");
     fs::create_dir_all(&files).expect("mkdir files");
     fs::write(
@@ -987,15 +1007,31 @@ fn apply_applies_mode_prefix_permissions() {
     cmd.assert().success();
 
     let mode = |name: &str| {
-        fs::metadata(target.join(name)).expect("stat").permissions().mode() & 0o777
+        fs::metadata(target.join(name))
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777
     };
 
     // umask에 무관한 "비트가 제거됨" 불변식만 검사한다(umask는 비트를 추가로 제거만 하므로 "set"
     // 단언은 환경 의존적). 이 clear 불변식들은 mode 적용의 양성 증거다 — base(0o644)라면 남았을
     // 비트가 제거됐음을 보인다. 정확한 비트값은 domain from_modes 테스트가 잠근다.
-    assert_eq!(mode("secret.txt") & 0o077, 0, "private_ clears group/other bits");
-    assert_eq!(mode("notes.md") & 0o222, 0, "readonly_ clears all write bits");
-    assert_eq!(mode("plain.txt") & 0o111, 0, "plain file has no execute bits");
+    assert_eq!(
+        mode("secret.txt") & 0o077,
+        0,
+        "private_ clears group/other bits"
+    );
+    assert_eq!(
+        mode("notes.md") & 0o222,
+        0,
+        "readonly_ clears all write bits"
+    );
+    assert_eq!(
+        mode("plain.txt") & 0o111,
+        0,
+        "plain file has no execute bits"
+    );
 }
 
 #[test]
@@ -1030,7 +1066,8 @@ fn apply_uses_scaffoldroot_effective_source_root() {
     // 이동해 거기의 scaffold.toml·files/를 읽어야 한다.
     let repo = tempfile::tempdir().expect("repo tempdir");
     fs::write(repo.path().join(".scaffoldroot"), "template\n").expect("write .scaffoldroot");
-    fs::write(repo.path().join("README.md"), "repo readme, not template").expect("write repo readme");
+    fs::write(repo.path().join("README.md"), "repo readme, not template")
+        .expect("write repo readme");
     let inner = repo.path().join("template");
     fs::create_dir_all(inner.join("files")).expect("mkdir inner files");
     fs::write(
@@ -1090,12 +1127,19 @@ fn apply_force_replaces_existing_external_symlink_dest_in_place() {
     cmd.assert().success();
 
     let meta = fs::symlink_metadata(target.join("data.txt")).expect("stat dest");
-    assert!(!meta.file_type().is_symlink(), "dest symlink must be replaced by a regular file");
+    assert!(
+        !meta.file_type().is_symlink(),
+        "dest symlink must be replaced by a regular file"
+    );
     assert_eq!(
         fs::read_to_string(target.join("data.txt")).unwrap(),
         "generated"
     );
-    assert_eq!(fs::read_to_string(&external).unwrap(), "SECRET", "external target must be untouched");
+    assert_eq!(
+        fs::read_to_string(&external).unwrap(),
+        "SECRET",
+        "external target must be untouched"
+    );
 }
 
 /// `project` 질문 + 인라인 before 훅(`$SCAFFOLDER_PROJECT`를 `hook-out.txt`에 씀)이 있는 템플릿.
@@ -1136,7 +1180,11 @@ fn apply_inline_before_hook_runs_with_env_and_cwd_when_yes() {
     cmd.assert().success();
 
     let out = fs::read_to_string(target.join("hook-out.txt")).expect("read hook-out.txt");
-    assert_eq!(out.trim(), "demo", "hook must see SCAFFOLDER_PROJECT env and run with cwd=target");
+    assert_eq!(
+        out.trim(),
+        "demo",
+        "hook must see SCAFFOLDER_PROJECT env and run with cwd=target"
+    );
 }
 
 #[test]
@@ -1211,7 +1259,10 @@ fn apply_inline_hooks_run_before_folder_hooks_in_declaration_and_lexical_order()
     cmd.assert().success();
 
     let order = fs::read_to_string(target.join("order.txt")).expect("read order.txt");
-    assert_eq!(order, "a\nb\n", "inline hooks must run before folder hooks (lexical)");
+    assert_eq!(
+        order, "a\nb\n",
+        "inline hooks must run before folder hooks (lexical)"
+    );
 }
 
 #[test]
@@ -1282,8 +1333,13 @@ fn apply_jinja_folder_hook_renders_with_answer_context_and_executes() {
 
     cmd.assert().success();
 
-    let out = fs::read_to_string(target.join("rendered-hook-out.txt")).expect("read rendered-hook-out.txt");
-    assert_eq!(out.trim(), "demo", "jinja folder hook must render with answer context and execute");
+    let out = fs::read_to_string(target.join("rendered-hook-out.txt"))
+        .expect("read rendered-hook-out.txt");
+    assert_eq!(
+        out.trim(),
+        "demo",
+        "jinja folder hook must render with answer context and execute"
+    );
 }
 
 /// payload 파일(`files/marker.txt` = "payload") + after 훅(`cat marker.txt`)이 있는 템플릿.
@@ -1320,7 +1376,11 @@ fn apply_after_hook_observes_written_payload_file() {
     cmd.assert().success();
 
     let out = fs::read_to_string(target.join("after-saw.txt")).expect("read after-saw.txt");
-    assert_eq!(out.trim(), "payload", "after hook must observe the already-written payload file");
+    assert_eq!(
+        out.trim(),
+        "payload",
+        "after hook must observe the already-written payload file"
+    );
 }
 
 #[test]
@@ -1342,7 +1402,10 @@ fn apply_dry_run_skips_hook_confirm_and_execution() {
     // --yes 없이도 dry-run은 confirm·훅 실행 자체를 생략하므로 성공해야 한다.
     cmd.assert().success();
 
-    assert!(!target.exists(), "dry-run must not create the target directory or run hooks");
+    assert!(
+        !target.exists(),
+        "dry-run must not create the target directory or run hooks"
+    );
 }
 
 /// 외부(실효 소스 루트 밖) 심링크 제어파일은 `--trust` 없이는 거부되어야 한다
@@ -1372,7 +1435,10 @@ fn apply_rejects_externally_symlinked_manifest_without_trust() {
         .arg(&target);
 
     cmd.assert().failure();
-    assert!(!target.exists(), "externally symlinked manifest must abort before target creation");
+    assert!(
+        !target.exists(),
+        "externally symlinked manifest must abort before target creation"
+    );
 }
 
 #[cfg(unix)]
@@ -1442,7 +1508,7 @@ fn apply_allows_internally_symlinked_manifest_without_trust() {
 #[cfg(unix)]
 #[test]
 fn apply_rejects_externally_symlinked_hook_script_without_trust() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
@@ -1453,7 +1519,9 @@ fn apply_rejects_externally_symlinked_hook_script_without_trust() {
     let outside = tempfile::tempdir().expect("outside tempdir");
     let external_script = outside.path().join("x.sh");
     fs::write(&external_script, "#!/bin/sh\necho hi > out.txt\n").expect("write external hook");
-    let mut perms = fs::metadata(&external_script).expect("metadata").permissions();
+    let mut perms = fs::metadata(&external_script)
+        .expect("metadata")
+        .permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&external_script, perms).expect("chmod +x external hook");
     let hooks_before = template.path().join("hooks/before");
@@ -1471,7 +1539,10 @@ fn apply_rejects_externally_symlinked_hook_script_without_trust() {
         .arg("--yes");
 
     cmd.assert().failure();
-    assert!(!target.exists(), "externally symlinked hook script must abort before target creation");
+    assert!(
+        !target.exists(),
+        "externally symlinked hook script must abort before target creation"
+    );
 }
 
 /// `.scaffoldroot` 자체가 소스 루트 밖 파일로의 심링크면, 그 내용(실효 소스 루트 선택)을
@@ -1485,8 +1556,11 @@ fn apply_rejects_externally_symlinked_scaffoldroot_without_trust() {
     let outside = tempfile::tempdir().expect("outside tempdir");
     let external_scaffoldroot = outside.path().join("scaffoldroot-content");
     fs::write(&external_scaffoldroot, "template\n").expect("write external scaffoldroot content");
-    symlink(&external_scaffoldroot, template.path().join(".scaffoldroot"))
-        .expect("symlink .scaffoldroot");
+    symlink(
+        &external_scaffoldroot,
+        template.path().join(".scaffoldroot"),
+    )
+    .expect("symlink .scaffoldroot");
 
     let inner = template.path().join("template");
     fs::create_dir_all(inner.join("files")).expect("mkdir inner files");
@@ -1518,8 +1592,11 @@ fn apply_allows_externally_symlinked_scaffoldroot_with_trust() {
     let outside = tempfile::tempdir().expect("outside tempdir");
     let external_scaffoldroot = outside.path().join("scaffoldroot-content");
     fs::write(&external_scaffoldroot, "template\n").expect("write external scaffoldroot content");
-    symlink(&external_scaffoldroot, template.path().join(".scaffoldroot"))
-        .expect("symlink .scaffoldroot");
+    symlink(
+        &external_scaffoldroot,
+        template.path().join(".scaffoldroot"),
+    )
+    .expect("symlink .scaffoldroot");
 
     let inner = template.path().join("template");
     fs::create_dir_all(inner.join("files")).expect("mkdir inner files");
@@ -1570,7 +1647,10 @@ fn apply_fails_on_broken_symlinked_hook_script() {
         .arg("--yes");
 
     cmd.assert().failure();
-    assert!(!target.exists(), "broken hook script symlink must abort before target creation");
+    assert!(
+        !target.exists(),
+        "broken hook script symlink must abort before target creation"
+    );
 }
 
 // --- 실패 시 target 정리 e2e ---
@@ -1630,7 +1710,8 @@ fn apply_failure_preserves_preexisting_target_and_sentinel() {
     cmd.assert().failure();
 
     assert_eq!(
-        fs::read_to_string(target.join("nested").join("deep.txt")).expect("nested sentinel must survive"),
+        fs::read_to_string(target.join("nested").join("deep.txt"))
+            .expect("nested sentinel must survive"),
         "user-data",
         "pre-existing target and nested user data must be preserved on failure"
     );

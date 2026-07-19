@@ -3,7 +3,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// 정규화된 상대 경로. 리터럴 `..`와 절대 경로를 배제한 뒤에만 생성 가능하다.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -197,10 +197,7 @@ mod tests {
         assert_eq!(base.with_executable().bits(), 0o777);
         assert_eq!(base.with_private().bits(), 0o600);
         assert_eq!(base.with_readonly().bits(), 0o444);
-        assert_eq!(
-            base.with_executable().with_private().bits(),
-            0o700
-        );
+        assert_eq!(base.with_executable().with_private().bits(), 0o700);
     }
 
     #[test]
@@ -249,8 +246,14 @@ mod tests {
 
     #[test]
     fn normalize_target_resolves_parent_and_cur_dir() {
-        assert_eq!(normalize_target(Path::new("/tmp/new/../existing")), PathBuf::from("/tmp/existing"));
-        assert_eq!(normalize_target(Path::new("/a/b/./c")), PathBuf::from("/a/b/c"));
+        assert_eq!(
+            normalize_target(Path::new("/tmp/new/../existing")),
+            PathBuf::from("/tmp/existing")
+        );
+        assert_eq!(
+            normalize_target(Path::new("/a/b/./c")),
+            PathBuf::from("/a/b/c")
+        );
         assert_eq!(normalize_target(Path::new("/a/b/..")), PathBuf::from("/a"));
         assert_eq!(normalize_target(Path::new("/a/b")), PathBuf::from("/a/b"));
     }

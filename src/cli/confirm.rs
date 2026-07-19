@@ -70,35 +70,55 @@ mod tests {
 
     #[test]
     fn force_does_not_approve_external_write() {
-        let confirmer = StdConfirmer { force: true, interactive: false, yes: false };
+        let confirmer = StdConfirmer {
+            force: true,
+            interactive: false,
+            yes: false,
+        };
 
         assert!(!confirmer.confirm_external_write(Path::new("/outside/file.txt")));
     }
 
     #[test]
     fn force_still_approves_overwrite() {
-        let confirmer = StdConfirmer { force: true, interactive: false, yes: false };
+        let confirmer = StdConfirmer {
+            force: true,
+            interactive: false,
+            yes: false,
+        };
 
         assert!(confirmer.confirm_overwrite(Path::new("/target/file.txt")));
     }
 
     #[test]
     fn force_does_not_approve_hook_confirm() {
-        let confirmer = StdConfirmer { force: true, interactive: false, yes: false };
+        let confirmer = StdConfirmer {
+            force: true,
+            interactive: false,
+            yes: false,
+        };
 
         assert!(!confirmer.confirm_hook("run setup script"));
     }
 
     #[test]
     fn yes_bypasses_hook_confirm() {
-        let confirmer = StdConfirmer { force: false, interactive: false, yes: true };
+        let confirmer = StdConfirmer {
+            force: false,
+            interactive: false,
+            yes: true,
+        };
 
         assert!(confirmer.confirm_hook("run setup script"));
     }
 
     #[test]
     fn non_interactive_without_yes_rejects_hook_confirm() {
-        let confirmer = StdConfirmer { force: false, interactive: false, yes: false };
+        let confirmer = StdConfirmer {
+            force: false,
+            interactive: false,
+            yes: false,
+        };
 
         assert!(!confirmer.confirm_hook("run setup script"));
     }

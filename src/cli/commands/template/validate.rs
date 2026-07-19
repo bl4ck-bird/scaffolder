@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Args;
 
-use crate::app::validate::{validate_template, Finding, FindingKind, ValidatePorts, ValidationReport};
+use crate::app::validate::{
+    Finding, FindingKind, ValidatePorts, ValidationReport, validate_template,
+};
 use crate::domain::store::{SourceRootSource, TemplateCatalog, TemplateStore};
 use crate::infra::load::manifest::TomlManifestSource;
 use crate::infra::load::partials::FsPartialSource;
@@ -59,7 +61,10 @@ fn resolve_targets(store: &FsTemplateStore, names: &[String]) -> Result<(Vec<Tar
         let targets = store
             .list()?
             .into_iter()
-            .map(|listing| Target { name: listing.name, template_root: listing.path })
+            .map(|listing| Target {
+                name: listing.name,
+                template_root: listing.path,
+            })
             .collect();
         return Ok((targets, 0));
     }
@@ -68,7 +73,10 @@ fn resolve_targets(store: &FsTemplateStore, names: &[String]) -> Result<(Vec<Tar
     let mut invalid_count = 0usize;
     for name in names {
         match store.resolve(name) {
-            Ok(template_root) => targets.push(Target { name: name.clone(), template_root }),
+            Ok(template_root) => targets.push(Target {
+                name: name.clone(),
+                template_root,
+            }),
             Err(err) => {
                 println!("{name}: failed to resolve template: {err}");
                 invalid_count += 1;
@@ -101,8 +109,14 @@ fn validate_one(target: &Target) -> bool {
         }
     };
 
-    let manifest_src = TomlManifestSource { root_canon: root_canon.clone(), trust: false };
-    let partial_source = FsPartialSource { root_canon: root_canon.clone(), trust: false };
+    let manifest_src = TomlManifestSource {
+        root_canon: root_canon.clone(),
+        trust: false,
+    };
+    let partial_source = FsPartialSource {
+        root_canon: root_canon.clone(),
+        trust: false,
+    };
     let payload = FsPayloadStore;
     let syntax = MiniJinjaSyntaxChecker::new();
 

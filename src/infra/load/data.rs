@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::domain::data::{merge, DataSource, DataValue};
-use crate::infra::load::trust::ensure_within_root;
+use crate::domain::data::{DataSource, DataValue, merge};
 use crate::infra::load::toml_to_data_value;
+use crate::infra::load::trust::ensure_within_root;
 
 /// `<template_root>/data/*.toml`을 파일명 lexical 순서로 `base`(매니페스트 `[data]`) 위에
 /// 단일 left-fold한다. `data/`가 없으면 `base` 그대로. 읽기/메타데이터 오류는 조용히 넘기지
@@ -31,8 +31,8 @@ impl DataSource for FsDataSource {
         for entry in fs::read_dir(&data_dir)
             .with_context(|| format!("failed to read data dir {}", data_dir.display()))?
         {
-            let entry = entry
-                .with_context(|| format!("failed to read entry in {}", data_dir.display()))?;
+            let entry =
+                entry.with_context(|| format!("failed to read entry in {}", data_dir.display()))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
@@ -92,7 +92,10 @@ mod tests {
         let loaded = source(dir.path()).load(dir.path(), base).unwrap();
 
         assert_eq!(get(&loaded, "from_base"), Some(&DataValue::Int(0)));
-        assert_eq!(get(&loaded, "shared"), Some(&DataValue::Str("from-b".into())));
+        assert_eq!(
+            get(&loaded, "shared"),
+            Some(&DataValue::Str("from-b".into()))
+        );
         assert_eq!(get(&loaded, "only_a"), Some(&DataValue::Int(1)));
         assert_eq!(get(&loaded, "only_b"), Some(&DataValue::Int(2)));
     }

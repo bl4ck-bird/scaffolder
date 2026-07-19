@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 use crate::domain::data::DataValue;
 use crate::domain::question::{Question, QuestionType};
@@ -110,7 +110,9 @@ pub fn coerce(question: &Question, raw: &str) -> Result<AnswerValue> {
                 .parse()
                 .map_err(|e| anyhow!("invalid float value {raw:?} for question {name:?}: {e}"))?;
             if !value.is_finite() {
-                bail!("invalid float value {raw:?} for question {name:?}: must be finite (not NaN/inf)");
+                bail!(
+                    "invalid float value {raw:?} for question {name:?}: must be finite (not NaN/inf)"
+                );
             }
             Ok(AnswerValue::Float(value))
         }
@@ -118,7 +120,9 @@ pub fn coerce(question: &Question, raw: &str) -> Result<AnswerValue> {
             "true" => Ok(AnswerValue::Bool(true)),
             "false" => Ok(AnswerValue::Bool(false)),
             other => {
-                bail!("invalid boolean value {other:?} for question {name:?}: expected \"true\" or \"false\"")
+                bail!(
+                    "invalid boolean value {other:?} for question {name:?}: expected \"true\" or \"false\""
+                )
             }
         },
         QuestionType::Select => {
@@ -412,16 +416,20 @@ mod tests {
         ];
         let q = question(QuestionType::Multiselect, choices);
 
-        assert!(validate_choice(
-            &q,
-            &AnswerValue::List(vec!["docker".to_string(), "ci".to_string()])
-        )
-        .is_ok());
-        assert!(validate_choice(
-            &q,
-            &AnswerValue::List(vec!["docker".to_string(), "unknown".to_string()])
-        )
-        .is_err());
+        assert!(
+            validate_choice(
+                &q,
+                &AnswerValue::List(vec!["docker".to_string(), "ci".to_string()])
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_choice(
+                &q,
+                &AnswerValue::List(vec!["docker".to_string(), "unknown".to_string()])
+            )
+            .is_err()
+        );
     }
 
     #[test]

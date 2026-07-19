@@ -1,6 +1,6 @@
 //! 파일명 문법 파싱 `[<mode_>]<name>[.jinja]` (basename만, 디렉토리명 리터럴).
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Unix 전용 모드 접두사. Stack 가능(`executable_private_`), 순서 무관.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,11 @@ pub fn parse_file_name(name: &str) -> Result<ParsedName> {
         bail!("file name {name:?} has empty basename after stripping mode prefixes/.jinja suffix");
     }
 
-    Ok(ParsedName { output_base, render, modes })
+    Ok(ParsedName {
+        output_base,
+        render,
+        modes,
+    })
 }
 
 #[cfg(test)]

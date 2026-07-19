@@ -7,11 +7,11 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::domain::place::{
-    normalize_target, safe_rel_path, DestStatus, FileMode, PayloadEntry, PayloadStore, RelPath,
-    TargetPreparation,
+    DestStatus, FileMode, PayloadEntry, PayloadStore, RelPath, TargetPreparation, normalize_target,
+    safe_rel_path,
 };
 
 /// 파일시스템 기반 `PayloadStore`: payload 읽기 + target에 containment·심링크 방어 하에 쓰기.
@@ -20,12 +20,22 @@ pub struct FsPayloadStore;
 impl PayloadStore for FsPayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>> {
         let mut entries = Vec::new();
-        let canonical_root = source_root
-            .canonicalize()
-            .with_context(|| format!("payload source root {} does not exist", source_root.display()))?;
+        let canonical_root = source_root.canonicalize().with_context(|| {
+            format!(
+                "payload source root {} does not exist",
+                source_root.display()
+            )
+        })?;
         let mut visited = HashSet::new();
         visited.insert(canonical_root.clone());
-        walk(source_root, source_root, &canonical_root, &mut visited, &mut entries, 0)?;
+        walk(
+            source_root,
+            source_root,
+            &canonical_root,
+            &mut visited,
+            &mut entries,
+            0,
+        )?;
         entries.sort_by(|a, b| a.rel.as_path().cmp(b.rel.as_path()));
         Ok(entries)
     }
@@ -35,13 +45,19 @@ impl PayloadStore for FsPayloadStore {
         // 열거(walk)와 읽기 사이에 심링크가 외부로 교체됐을 수 있으므로 읽기 직전 containment를
         // 재검증하고, 심링크를 재추종하지 않도록 canonical 경로에서 읽는다(source-side 갭 축소).
         let canonical_root = source_root.canonicalize().with_context(|| {
-            format!("payload source root {} does not exist", source_root.display())
+            format!(
+                "payload source root {} does not exist",
+                source_root.display()
+            )
         })?;
         let canonical = path
             .canonicalize()
             .with_context(|| format!("failed to resolve payload file {}", path.display()))?;
         if !canonical.starts_with(&canonical_root) {
-            bail!("payload file {} resolves outside the source root", path.display());
+            bail!(
+                "payload file {} resolves outside the source root",
+                path.display()
+            );
         }
         fs::read(&canonical)
             .with_context(|| format!("failed to read payload file {}", path.display()))
@@ -64,16 +80,23 @@ impl PayloadStore for FsPayloadStore {
                 // 있다. `metadata`는 symlink를 follow하므로 broken/비-디렉토리 symlink는 오류가 된다.
                 // 어느 경우든 우리가 만들지 않았으므로 정리 대상이 아니다.
                 let meta = fs::metadata(&effective).with_context(|| {
-                    format!("target {} exists but could not be inspected", effective.display())
+                    format!(
+                        "target {} exists but could not be inspected",
+                        effective.display()
+                    )
                 })?;
                 if meta.is_dir() {
                     Ok(TargetPreparation::Existing)
                 } else {
-                    bail!("target {} exists and is not a directory", effective.display())
+                    bail!(
+                        "target {} exists and is not a directory",
+                        effective.display()
+                    )
                 }
             }
-            Err(e) => Err(anyhow!(e))
-                .with_context(|| format!("failed to create target directory {}", effective.display())),
+            Err(e) => Err(anyhow!(e)).with_context(|| {
+                format!("failed to create target directory {}", effective.display())
+            }),
         }
     }
 
@@ -81,8 +104,12 @@ impl PayloadStore for FsPayloadStore {
         // ensure_target과 동일하게 정규화한 실효 경로만 삭제한다 — 렌더 경로가 아니라 준비된 그
         // target root에만 호출된다(호출부 pipeline이 Created일 때만 부른다).
         let effective = normalize_target(target_root);
-        fs::remove_dir_all(&effective)
-            .with_context(|| format!("failed to clean up target directory {}", effective.display()))
+        fs::remove_dir_all(&effective).with_context(|| {
+            format!(
+                "failed to clean up target directory {}",
+                effective.display()
+            )
+        })
     }
 
     fn write_file(
@@ -96,8 +123,9 @@ impl PayloadStore for FsPayloadStore {
         let path = target_root.join(rel.as_path());
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create parent directory for {}", path.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create parent directory for {}", path.display())
+            })?;
         }
 
         atomic_write(&path, content, mode, overwrite)
@@ -159,10 +187,7 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) ->
     let mut last_exists_err = None;
     for _ in 0..MAX_TEMP_ATTEMPTS {
         let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temp_path = parent.join(format!(
-            ".{file_name}.{}.{counter}.tmp",
-            std::process::id()
-        ));
+        let temp_path = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
 
         let mut file = match fs::OpenOptions::new()
             .write(true)
@@ -183,7 +208,8 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) ->
 
         if let Err(e) = file.write_all(content).and_then(|()| file.sync_all()) {
             let _ = fs::remove_file(&temp_path);
-            return Err(e).with_context(|| format!("failed to write temp file for {}", dest.display()));
+            return Err(e)
+                .with_context(|| format!("failed to write temp file for {}", dest.display()));
         }
         drop(file);
 
@@ -275,7 +301,10 @@ fn walk(
 ) -> Result<()> {
     // 병적으로 깊은(또는 심링크 alias로 부풀려진) 트리에 대한 backstop.
     if depth > MAX_WALK_DEPTH {
-        bail!("payload tree exceeds max depth {MAX_WALK_DEPTH} at {}", dir.display());
+        bail!(
+            "payload tree exceeds max depth {MAX_WALK_DEPTH} at {}",
+            dir.display()
+        );
     }
     let read_dir =
         fs::read_dir(dir).with_context(|| format!("failed to read directory {}", dir.display()))?;
@@ -299,9 +328,9 @@ fn walk(
 
         if file_type.is_symlink() {
             // 심링크는 최종 위치를 canonical로 해석해 source root 안인지 판정한다.
-            let canonical_target = path.canonicalize().with_context(|| {
-                format!("failed to resolve payload symlink {}", path.display())
-            })?;
+            let canonical_target = path
+                .canonicalize()
+                .with_context(|| format!("failed to resolve payload symlink {}", path.display()))?;
             if !canonical_target.starts_with(canonical_root) {
                 bail!(
                     "payload symlink {} points outside the source root",
@@ -371,7 +400,10 @@ mod tests {
         let target = base.path().join("missing").join("..").join("preexisting");
         let prep = FsPayloadStore.ensure_target(&target).expect("ensure");
         assert_eq!(prep, TargetPreparation::Existing);
-        assert!(!base.path().join("missing").exists(), "sibling must not be created");
+        assert!(
+            !base.path().join("missing").exists(),
+            "sibling must not be created"
+        );
     }
 
     #[test]
@@ -382,7 +414,11 @@ mod tests {
         let result = FsPayloadStore.ensure_target(&target);
         assert!(result.is_err(), "file at target must be an error");
         assert!(target.is_file(), "the file must not be deleted");
-        assert_eq!(fs::read(&target).expect("file survives"), b"data", "file contents intact");
+        assert_eq!(
+            fs::read(&target).expect("file survives"),
+            b"data",
+            "file contents intact"
+        );
     }
 
     #[test]
@@ -396,7 +432,10 @@ mod tests {
         symlink(&real, &target).expect("file symlink");
         let result = FsPayloadStore.ensure_target(&target);
         assert!(result.is_err(), "symlink to a file must be a prepare error");
-        assert!(target.symlink_metadata().is_ok(), "the symlink must not be deleted");
+        assert!(
+            target.symlink_metadata().is_ok(),
+            "the symlink must not be deleted"
+        );
         assert_eq!(fs::read(&real).expect("target file survives"), b"data");
     }
 
@@ -408,7 +447,10 @@ mod tests {
         symlink(base.path().join("nonexistent"), &target).expect("broken symlink");
         let result = FsPayloadStore.ensure_target(&target);
         assert!(result.is_err(), "broken symlink must be a prepare error");
-        assert!(target.symlink_metadata().is_ok(), "the broken symlink must not be deleted");
+        assert!(
+            target.symlink_metadata().is_ok(),
+            "the broken symlink must not be deleted"
+        );
     }
 
     #[test]
@@ -421,9 +463,14 @@ mod tests {
         fs::write(real.join("sentinel"), b"keep").expect("sentinel");
         let target = base.path().join("dirlink");
         symlink(&real, &target).expect("dir symlink");
-        let prep = FsPayloadStore.ensure_target(&target).expect("dir symlink resolves to Existing");
+        let prep = FsPayloadStore
+            .ensure_target(&target)
+            .expect("dir symlink resolves to Existing");
         assert_eq!(prep, TargetPreparation::Existing);
-        assert_eq!(fs::read(real.join("sentinel")).expect("contents survive"), b"keep");
+        assert_eq!(
+            fs::read(real.join("sentinel")).expect("contents survive"),
+            b"keep"
+        );
     }
 
     #[test]
@@ -455,7 +502,10 @@ mod tests {
             fs::read(base.path().join("parent_sentinel")).expect("parent survives"),
             b"parent"
         );
-        assert_eq!(fs::read(sibling.join("s")).expect("sibling survives"), b"sib");
+        assert_eq!(
+            fs::read(sibling.join("s")).expect("sibling survives"),
+            b"sib"
+        );
     }
 
     #[test]
@@ -487,7 +537,9 @@ mod tests {
         fs::create_dir(source.path().join("sub")).expect("mkdir sub");
         fs::write(source.path().join("sub/b.txt"), b"b").expect("write b.txt");
 
-        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
+        let entries = FsPayloadStore
+            .list_entries(source.path())
+            .expect("list_entries");
 
         let rels: Vec<String> = entries.iter().map(|e| e.rel.to_string()).collect();
         assert!(rels.contains(&"a.txt".to_string()));
@@ -510,13 +562,18 @@ mod tests {
         fs::write(source.path().join("real/x.txt"), b"x").expect("write x");
         symlink(source.path().join("real"), source.path().join("link")).expect("symlink dir");
 
-        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
+        let entries = FsPayloadStore
+            .list_entries(source.path())
+            .expect("list_entries");
         let rels: Vec<String> = entries.iter().map(|e| e.rel.to_string()).collect();
 
         // 심링크 디렉토리가 dereference되어 하위가 열거된다.
         assert!(rels.contains(&"link".to_string()));
         assert!(rels.contains(&"link/x.txt".to_string()));
-        let link_entry = entries.iter().find(|e| e.rel.to_string() == "link").unwrap();
+        let link_entry = entries
+            .iter()
+            .find(|e| e.rel.to_string() == "link")
+            .unwrap();
         assert!(link_entry.is_dir);
     }
 
@@ -524,12 +581,23 @@ mod tests {
     fn list_entries_reads_inside_file_symlink_content() {
         let source = tempfile::tempdir().expect("tempdir");
         fs::write(source.path().join("real.txt"), b"real-content").expect("write real");
-        symlink(source.path().join("real.txt"), source.path().join("link.txt")).expect("symlink");
+        symlink(
+            source.path().join("real.txt"),
+            source.path().join("link.txt"),
+        )
+        .expect("symlink");
 
-        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
-        let link = entries.iter().find(|e| e.rel.to_string() == "link.txt").unwrap();
+        let entries = FsPayloadStore
+            .list_entries(source.path())
+            .expect("list_entries");
+        let link = entries
+            .iter()
+            .find(|e| e.rel.to_string() == "link.txt")
+            .unwrap();
         assert!(!link.is_dir);
-        let content = FsPayloadStore.read_content(source.path(), link).expect("read");
+        let content = FsPayloadStore
+            .read_content(source.path(), link)
+            .expect("read");
         assert_eq!(content, b"real-content");
     }
 
@@ -553,7 +621,9 @@ mod tests {
         symlink(source.path().join("real"), source.path().join("link_a")).expect("link_a");
         symlink(source.path().join("real"), source.path().join("link_b")).expect("link_b");
 
-        let entries = FsPayloadStore.list_entries(source.path()).expect("list_entries");
+        let entries = FsPayloadStore
+            .list_entries(source.path())
+            .expect("list_entries");
         let rels: Vec<String> = entries.iter().map(|e| e.rel.to_string()).collect();
         assert!(rels.contains(&"link_a/x.txt".to_string()));
         assert!(rels.contains(&"link_b/x.txt".to_string()));
@@ -562,7 +632,11 @@ mod tests {
     #[test]
     fn list_entries_errors_on_broken_payload_symlink() {
         let source = tempfile::tempdir().expect("tempdir");
-        symlink(source.path().join("missing"), source.path().join("dangling")).expect("symlink");
+        symlink(
+            source.path().join("missing"),
+            source.path().join("dangling"),
+        )
+        .expect("symlink");
         let result = FsPayloadStore.list_entries(source.path());
         assert!(result.is_err(), "broken payload symlink must fail loud");
     }
@@ -616,7 +690,10 @@ mod tests {
         // overwrite=false인데 dest가 이미 있으면(plan 이후 경쟁 생성 등) 조용히 덮지 않고 실패한다.
         let result =
             FsPayloadStore.write_file(target.path(), &rel, b"new", FileMode::base(), false);
-        assert!(result.is_err(), "no-clobber create must fail when dest exists");
+        assert!(
+            result.is_err(),
+            "no-clobber create must fail when dest exists"
+        );
 
         // 기존 내용 보존.
         assert_eq!(
@@ -628,7 +705,10 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
-        assert!(!leftover, "no temp file should remain after a failed no-clobber write");
+        assert!(
+            !leftover,
+            "no temp file should remain after a failed no-clobber write"
+        );
     }
 
     #[test]

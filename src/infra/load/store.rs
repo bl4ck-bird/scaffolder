@@ -3,7 +3,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::domain::skeleton::SkeletonEntry;
 use crate::domain::store::{TemplateCatalog, TemplateInitializer, TemplateListing, TemplateStore};
@@ -125,7 +125,10 @@ impl TemplateInitializer for FsTemplateStore {
         // exists 가드는 어떤 entry도 쓰기 전에 검사한다 — 재실행 시 기존 디렉토리를
         // 부작용 없이 abort하기 위함(디렉토리든 파일이든 이미 있으면 거부).
         if template_root.symlink_metadata().is_ok() {
-            bail!("template {name:?} already exists at {}", template_root.display());
+            bail!(
+                "template {name:?} already exists at {}",
+                template_root.display()
+            );
         }
 
         for entry in entries {
