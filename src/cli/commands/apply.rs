@@ -12,6 +12,7 @@ use crate::app::report::format_plan;
 use crate::cli::confirm::StdConfirmer;
 use crate::cli::prompt::InquireAnswerSource;
 use crate::domain::answer::ScaffolderBuiltins;
+use crate::domain::place::normalize_target;
 use crate::domain::render::PartialSource;
 use crate::domain::store::{SourceRootSource, TemplateStore};
 use crate::infra::load::answers::load_answers_file;
@@ -60,6 +61,11 @@ pub struct ApplyArgs {
     /// plan만 출력하고 쓰지 않는다.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+    /// 실패 시 새로 만든 target 정리를 끈다(기본: 정리함). 켜져 있으면 apply가 새로 만든 target을
+    /// 만든 뒤 실패했을 때 그 target을 지운다(사전 존재 target은 항상 보존). 정리는 best-effort로,
+    /// 정상 종료 실패에만 적용되며 signal·강제 종료·전원 장애에는 보장되지 않는다.
+    #[arg(long = "no-cleanup-on-failure")]
+    pub no_cleanup_on_failure: bool,
 }
 
 pub fn run(args: ApplyArgs) -> Result<()> {
@@ -82,8 +88,13 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("failed to resolve template root {}", template_root.display()))?;
     let trust = args.trust;
+    // 실효 target을 합성 루트에서 한 번 확정한다: `std::path::absolute`는 `..`를 lexical로 보존하므로,
+    // 곧바로 정규화해 이후 모든 소비자(훅 cwd·dest_status·write_file·ensure_target·cleanup_target)가
+    // 동일한 경로를 쓰게 한다. 부분 정규화는 `..` target에서 prepare(정규화)와 write/hook(raw)이 갈려
+    // 유효한 target에 apply가 실패하는 원인이 된다.
     let target_root = std::path::absolute(PathBuf::from(&args.target))
         .with_context(|| format!("failed to resolve target path {:?}", args.target))?;
+    let target_root = normalize_target(&target_root);
 
     let answers = parse_answers(&args.answers)?;
     let answers_file = match &args.answers_file {
@@ -115,6 +126,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         defaults_only: args.defaults,
         interactive,
         dry_run: args.dry_run,
+        cleanup_on_failure: !args.no_cleanup_on_failure,
     };
 
     let manifest_src = TomlManifestSource {

@@ -19,7 +19,7 @@ use crate::domain::hook::{hook_env, Confirmer, HookPhase, HookRunner, HookSource
 use crate::domain::ignore::IgnoreSource;
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
-use crate::domain::place::{safe_rel_path, FileMode, PayloadStore, RelPath};
+use crate::domain::place::{safe_rel_path, FileMode, PayloadStore, RelPath, TargetPreparation};
 use crate::domain::question::Question;
 use crate::domain::render::Renderer;
 
@@ -31,8 +31,11 @@ pub struct ApplyRequest {
     pub defaults_only: bool,
     pub interactive: bool,
     pub dry_run: bool,
+    /// target 준비 후 실패 시 우리가 만든(`Created`) target을 정리할지. false면 보존한다.
+    pub cleanup_on_failure: bool,
 }
 
+#[derive(Debug)]
 pub struct PlannedWrite {
     pub rel: RelPath,
     pub rendered: bool,
@@ -40,6 +43,7 @@ pub struct PlannedWrite {
     pub mode: FileMode,
 }
 
+#[derive(Debug)]
 pub struct ApplyReport {
     pub planned: Vec<PlannedWrite>,
 }
@@ -159,56 +163,75 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
 
     // target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
     // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
-    ports.payload.ensure_target(&req.target_root)?;
+    let prep = ports.payload.ensure_target(&req.target_root)?;
 
-    run_phase(
-        ports.hook_runner,
-        ports.renderer,
-        &ctx,
-        &before_inline,
-        &before_scripts,
-        &req.target_root,
-        &hook_env_map,
-    )?;
-
-    for planned_write in &planned {
-        let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
-
-        // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
-        // 계속한다(overwrite와 달리 hard-fail이 아니다).
-        if !status.inside_target && !ports.confirmer.confirm_external_write(&status.final_path) {
-            eprintln!(
-                "warning: skipping {} — write escapes target and was not confirmed",
-                status.final_path.display()
-            );
-            continue;
-        }
-
-        if status.exists && !ports.confirmer.confirm_overwrite(&status.final_path) {
-            bail!(
-                "destination {} exists; pass --force to overwrite",
-                status.final_path.display()
-            );
-        }
-
-        ports.payload.write_file(
+    // prepare 이후의 모든 부작용(before-hook·write·after-hook)을 한 스코프로 묶는다. 어느 단계에서
+    // 실패하든, 우리가 만든(`Created`) target이고 정리가 켜져 있으면 best-effort로 삭제한 뒤 원래
+    // 에러를 전파한다. 사전 존재(`Existing`) target과 정리 off는 부분 산출물을 남기고 보존한다.
+    let outcome = (|| -> Result<()> {
+        run_phase(
+            ports.hook_runner,
+            ports.renderer,
+            &ctx,
+            &before_inline,
+            &before_scripts,
             &req.target_root,
-            &planned_write.rel,
-            &planned_write.content,
-            planned_write.mode,
-            status.exists,
+            &hook_env_map,
         )?;
-    }
 
-    run_phase(
-        ports.hook_runner,
-        ports.renderer,
-        &ctx,
-        &after_inline,
-        &after_scripts,
-        &req.target_root,
-        &hook_env_map,
-    )?;
+        for planned_write in &planned {
+            let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
+
+            // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
+            // 계속한다(overwrite와 달리 hard-fail이 아니다).
+            if !status.inside_target && !ports.confirmer.confirm_external_write(&status.final_path) {
+                eprintln!(
+                    "warning: skipping {} — write escapes target and was not confirmed",
+                    status.final_path.display()
+                );
+                continue;
+            }
+
+            if status.exists && !ports.confirmer.confirm_overwrite(&status.final_path) {
+                bail!(
+                    "destination {} exists; pass --force to overwrite",
+                    status.final_path.display()
+                );
+            }
+
+            ports.payload.write_file(
+                &req.target_root,
+                &planned_write.rel,
+                &planned_write.content,
+                planned_write.mode,
+                status.exists,
+            )?;
+        }
+
+        run_phase(
+            ports.hook_runner,
+            ports.renderer,
+            &ctx,
+            &after_inline,
+            &after_scripts,
+            &req.target_root,
+            &hook_env_map,
+        )?;
+
+        Ok(())
+    })();
+
+    if let Err(e) = outcome {
+        if prep == TargetPreparation::Created && req.cleanup_on_failure {
+            if let Err(cleanup_err) = ports.payload.cleanup_target(&req.target_root) {
+                eprintln!(
+                    "warning: failed to clean up target {}: {cleanup_err:#}",
+                    req.target_root.display()
+                );
+            }
+        }
+        return Err(e);
+    }
 
     Ok(ApplyReport { planned })
 }
@@ -413,6 +436,26 @@ mod tests {
         }
     }
 
+    /// before/after 훅 실행이 실패하는 상황을 주입하는 테스트용 `HookRunner`(정리 가드 검증용).
+    struct FailingHookRunner;
+    impl HookRunner for FailingHookRunner {
+        fn run_inline(&self, _command: &str, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+            bail!("simulated hook failure")
+        }
+        fn run_script_file(&self, _path: &Path, _cwd: &Path, _env: &BTreeMap<String, String>) -> Result<()> {
+            bail!("simulated hook failure")
+        }
+        fn run_rendered(
+            &self,
+            _name: &str,
+            _content: &[u8],
+            _cwd: &Path,
+            _env: &BTreeMap<String, String>,
+        ) -> Result<()> {
+            bail!("simulated hook failure")
+        }
+    }
+
     /// 고정값을 반환하거나(`returning`), 호출되면 실패해야 함을 표시하는(`unreachable`)
     /// 테스트용 `AnswerSource`. precedence가 프롬프트를 건너뛰어야 하는 경로에서
     /// `ask`가 호출되지 않았음을 검증하는 데 쓴다.
@@ -476,6 +519,22 @@ mod tests {
         contents: HashMap<String, Vec<u8>>,
         dest_statuses: RefCell<HashMap<String, DestStatus>>,
         written: RefCell<Vec<(RelPath, Vec<u8>)>>,
+        /// `ensure_target`이 반환할 판정(테스트별로 Created/Existing 지정).
+        prep: TargetPreparation,
+        /// `cleanup_target`이 호출됐는지 기록.
+        cleaned: RefCell<bool>,
+        /// true면 `cleanup_target`이 호출은 기록하되 에러를 반환한다(원래 에러 우선 전파 검증용).
+        cleanup_fails: bool,
+        /// `cleanup_target`이 받은 경로(exact prepared root 전달 검증용).
+        cleaned_path: RefCell<Option<PathBuf>>,
+        /// `ensure_target`이 호출됐는지 기록(pre-prepare 실패 시 미호출 검증용).
+        prepared: RefCell<bool>,
+        /// true면 `write_file`이 실제 I/O 실패를 흉내 내 에러를 반환한다.
+        write_fails: bool,
+        /// true면 `dest_status`가 에러를 반환한다(post-prepare 실패 경로 검증용).
+        dest_status_fails: bool,
+        /// true면 `ensure_target`이 에러를 반환한다(prepare 자체 실패 → cleanup 미호출 검증용).
+        prepare_fails: bool,
     }
 
     impl PayloadStore for FakePayloadStore {
@@ -487,7 +546,20 @@ mod tests {
             Ok(self.contents.get(&entry.rel.to_string()).cloned().unwrap_or_default())
         }
 
-        fn ensure_target(&self, _target_root: &Path) -> Result<()> {
+        fn ensure_target(&self, _target_root: &Path) -> Result<TargetPreparation> {
+            *self.prepared.borrow_mut() = true;
+            if self.prepare_fails {
+                bail!("simulated prepare failure");
+            }
+            Ok(self.prep)
+        }
+
+        fn cleanup_target(&self, target_root: &Path) -> Result<()> {
+            *self.cleaned.borrow_mut() = true;
+            *self.cleaned_path.borrow_mut() = Some(target_root.to_path_buf());
+            if self.cleanup_fails {
+                bail!("simulated cleanup failure");
+            }
             Ok(())
         }
 
@@ -499,11 +571,17 @@ mod tests {
             _mode: crate::domain::place::FileMode,
             _overwrite: bool,
         ) -> Result<()> {
+            if self.write_fails {
+                bail!("simulated write failure");
+            }
             self.written.borrow_mut().push((rel.clone(), content.to_vec()));
             Ok(())
         }
 
         fn dest_status(&self, _target_root: &Path, rel: &RelPath) -> Result<DestStatus> {
+            if self.dest_status_fails {
+                bail!("simulated dest_status failure");
+            }
             Ok(self
                 .dest_statuses
                 .borrow()
@@ -567,6 +645,14 @@ mod tests {
             contents: HashMap::from([("README.md.jinja".to_string(), b"# {{ project }}".to_vec())]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
 
         let mut answers = BTreeMap::new();
@@ -579,6 +665,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: true,
+            cleanup_on_failure: true,
         };
 
         let report = apply(
@@ -622,6 +709,14 @@ mod tests {
             ]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
 
         let req = ApplyRequest {
@@ -632,6 +727,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: true,
+            cleanup_on_failure: true,
         };
 
         let result = apply(
@@ -665,6 +761,14 @@ mod tests {
             contents: HashMap::new(),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
 
         let req = ApplyRequest {
@@ -675,6 +779,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: true,
+            cleanup_on_failure: true,
         };
 
         let result = apply(
@@ -721,6 +826,14 @@ mod tests {
             contents: HashMap::from([("linked/outside.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(dest_statuses),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
 
         let req = ApplyRequest {
@@ -731,6 +844,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: false,
+            cleanup_on_failure: true,
         };
 
         let result = apply(
@@ -775,6 +889,14 @@ mod tests {
             contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(dest_statuses),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
 
         let req = ApplyRequest {
@@ -785,6 +907,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: false,
+            cleanup_on_failure: true,
         };
 
         let result = apply(
@@ -1181,6 +1304,14 @@ mod tests {
             contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
         let runner = FakeHookRunner::new();
 
@@ -1192,6 +1323,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: false,
+            cleanup_on_failure: true,
         };
 
         let result = apply(
@@ -1231,6 +1363,14 @@ mod tests {
             contents: HashMap::new(),
             dest_statuses: RefCell::new(HashMap::new()),
             written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
         };
         let runner = FakeHookRunner::new();
 
@@ -1242,6 +1382,7 @@ mod tests {
             defaults_only: false,
             interactive: false,
             dry_run: true,
+            cleanup_on_failure: true,
         };
 
         let report = apply(
@@ -1265,5 +1406,405 @@ mod tests {
 
         assert!(report.planned.is_empty());
         assert!(runner.calls.borrow().is_empty(), "dry-run must not execute hooks");
+    }
+
+    // --- 실패 시 target 정리 가드 ---
+
+    /// overwrite 거부로 write 단계에서 실패하는 store(정리 가드 검증용). dest가 이미 존재한다고
+    /// 보고하므로 `confirm_overwrite=false`면 write loop에서 bail한다.
+    fn overwrite_conflict_store(prep: TargetPreparation, cleanup_fails: bool) -> FakePayloadStore {
+        let mut dest_statuses = HashMap::new();
+        dest_statuses.insert(
+            "file.txt".to_string(),
+            DestStatus {
+                final_path: PathBuf::from("/target/file.txt"),
+                inside_target: true,
+                exists: true,
+                is_symlink: false,
+            },
+        );
+        FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
+            dest_statuses: RefCell::new(dest_statuses),
+            written: RefCell::new(Vec::new()),
+            prep,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails,
+            prepare_fails: false,
+        }
+    }
+
+    fn cleanup_req(cleanup_on_failure: bool) -> ApplyRequest {
+        ApplyRequest {
+            template_root: PathBuf::from("/tpl"),
+            target_root: PathBuf::from("/target"),
+            answers: BTreeMap::new(),
+            answers_file: BTreeMap::new(),
+            defaults_only: false,
+            interactive: false,
+            dry_run: false,
+            cleanup_on_failure,
+        }
+    }
+
+    fn empty_manifest() -> Manifest {
+        Manifest { questions: vec![], ..Default::default() }
+    }
+
+    /// 정리 가드 테스트용 apply 실행: overwrite 거부(post-prepare 실패)를 유발하고 결과를 반환한다.
+    fn run_with_overwrite_conflict(
+        manifest: Manifest,
+        store: &FakePayloadStore,
+        req: &ApplyRequest,
+    ) -> Result<ApplyReport> {
+        apply(
+            req,
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: store,
+                confirmer: &FakeConfirmer { overwrite: false, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn created_target_is_cleaned_up_on_write_io_failure() {
+        // 실제 write_file I/O 실패를 주입한다(overwrite 거부 대리가 아님). 또한 정리가 정확히
+        // 준비된 target root 경로로 호출되는지 검증한다.
+        let store = FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: true,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
+        };
+        let req = cleanup_req(true);
+        let result = apply(
+            &req,
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(empty_manifest()),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
+            },
+        );
+        assert!(result.is_err());
+        assert!(*store.cleaned.borrow(), "created target must be cleaned up on write I/O failure");
+        assert_eq!(
+            store.cleaned_path.borrow().as_deref(),
+            Some(req.target_root.as_path()),
+            "cleanup must be called with exactly the prepared target root"
+        );
+    }
+
+    #[test]
+    fn created_target_is_cleaned_up_on_dest_status_failure() {
+        // dest_status 오류도 post-prepare 실패 경로이므로 동일 정책(정리)을 받는다.
+        let store = FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: true,
+            cleanup_fails: false,
+            prepare_fails: false,
+        };
+        let result = apply(
+            &cleanup_req(true),
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(empty_manifest()),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
+            },
+        );
+        assert!(result.is_err());
+        assert!(*store.cleaned.borrow(), "dest_status failure must also trigger cleanup");
+    }
+
+    #[test]
+    fn created_target_is_cleaned_up_on_before_hook_failure() {
+        let manifest = Manifest {
+            questions: vec![],
+            hooks: crate::domain::hook::Hooks {
+                before: vec![crate::domain::hook::Hook { when: None, run: "boom".to_string() }],
+                after: vec![],
+            },
+            ..Default::default()
+        };
+        let store = FakePayloadStore {
+            entries: vec![],
+            contents: HashMap::new(),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
+        };
+        let result = apply(
+            &cleanup_req(true),
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FailingHookRunner,
+            },
+        );
+        assert!(result.is_err());
+        assert!(*store.cleaned.borrow(), "created target must be cleaned up when before-hook fails");
+    }
+
+    #[test]
+    fn created_target_is_cleaned_up_on_after_hook_failure() {
+        // before는 비고 after만 실패 → write까지 성공한 뒤 after-hook에서 실패해도 정리된다.
+        let manifest = Manifest {
+            questions: vec![],
+            hooks: crate::domain::hook::Hooks {
+                before: vec![],
+                after: vec![crate::domain::hook::Hook { when: None, run: "boom".to_string() }],
+            },
+            ..Default::default()
+        };
+        // payload를 실제로 배치(write 성공)한 뒤 after-hook에서 실패시켜, "완성된 산출물까지
+        // 포함해" target이 정리됨을 증명한다.
+        let store = FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("file.txt".to_string(), b"x".to_vec())]),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
+        };
+        let result = apply(
+            &cleanup_req(true),
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FailingHookRunner,
+            },
+        );
+        assert!(result.is_err());
+        assert!(!store.written.borrow().is_empty(), "write must have completed before after-hook");
+        assert!(*store.cleaned.borrow(), "created target must be cleaned up when after-hook fails");
+    }
+
+    #[test]
+    fn existing_target_is_preserved_on_failure() {
+        let store = overwrite_conflict_store(TargetPreparation::Existing, false);
+        let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(true));
+        assert!(result.is_err());
+        assert!(!*store.cleaned.borrow(), "pre-existing target must never be cleaned up");
+    }
+
+    #[test]
+    fn no_cleanup_flag_preserves_created_target_on_failure() {
+        let store = overwrite_conflict_store(TargetPreparation::Created, false);
+        let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(false));
+        assert!(result.is_err());
+        assert!(!*store.cleaned.borrow(), "--no-cleanup-on-failure must preserve the target");
+    }
+
+    #[test]
+    fn successful_apply_does_not_clean_up() {
+        let mut dest_statuses = HashMap::new();
+        dest_statuses.insert(
+            "file.txt".to_string(),
+            DestStatus {
+                final_path: PathBuf::from("/target/file.txt"),
+                inside_target: true,
+                exists: false,
+                is_symlink: false,
+            },
+        );
+        let store = FakePayloadStore {
+            entries: vec![PayloadEntry { rel: safe_rel_path("file.txt").unwrap(), is_dir: false }],
+            contents: HashMap::from([("file.txt".to_string(), b"content".to_vec())]),
+            dest_statuses: RefCell::new(dest_statuses),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
+        };
+        let result = apply(
+            &cleanup_req(true),
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(empty_manifest()),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
+            },
+        );
+        assert!(result.is_ok());
+        assert!(!*store.cleaned.borrow(), "successful apply must not clean up");
+    }
+
+    #[test]
+    fn cleanup_failure_does_not_mask_original_error() {
+        let store = overwrite_conflict_store(TargetPreparation::Created, true);
+        let result = run_with_overwrite_conflict(empty_manifest(), &store, &cleanup_req(true));
+        let err = result.expect_err("apply must fail");
+        assert!(*store.cleaned.borrow(), "cleanup must have been attempted");
+        // 원래(overwrite) 에러가 정리 실패 에러로 대체되지 않는다.
+        assert!(
+            err.to_string().contains("exists"),
+            "original error must survive, got: {err}"
+        );
+    }
+
+    #[test]
+    fn pre_prepare_failure_does_not_clean_up() {
+        // 답변 누락으로 ensure_target 이전(resolve_answers)에서 실패 → 정리 대상 없음.
+        let manifest = Manifest {
+            questions: vec![string_question("project", None)],
+            ..Default::default()
+        };
+        let store = FakePayloadStore {
+            entries: vec![],
+            contents: HashMap::new(),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: false,
+        };
+        let result = apply(
+            &cleanup_req(true),
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(manifest),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
+            },
+        );
+        assert!(result.is_err());
+        assert!(!*store.prepared.borrow(), "ensure_target must not be called on pre-prepare failure");
+        assert!(!*store.cleaned.borrow(), "pre-prepare failure must not trigger cleanup");
+    }
+
+    #[test]
+    fn prepare_failure_itself_does_not_clean_up() {
+        // ensure_target 자체가 실패하면(권한 등) 준비된 target이 없으므로 정리하지 않는다.
+        let store = FakePayloadStore {
+            entries: vec![],
+            contents: HashMap::new(),
+            dest_statuses: RefCell::new(HashMap::new()),
+            written: RefCell::new(Vec::new()),
+            prep: TargetPreparation::Created,
+            cleaned: RefCell::new(false),
+            cleaned_path: RefCell::new(None),
+            prepared: RefCell::new(false),
+            write_fails: false,
+            dest_status_fails: false,
+            cleanup_fails: false,
+            prepare_fails: true,
+        };
+        let result = apply(
+            &cleanup_req(true),
+            builtins(),
+            ApplyPorts {
+                manifest_src: &FakeManifestSource(empty_manifest()),
+                data_source: &FakeDataSource,
+                renderer: &FakeRenderer,
+                payload: &store,
+                confirmer: &FakeConfirmer { overwrite: true, external: true },
+                answer_source: &FakeAnswerSource::unreachable(),
+                condition_evaluator: &FakeConditionEvaluator::always(true),
+                ignore_source: &FakeIgnoreSource::none(),
+                hook_source: &FakeHookSource,
+                hook_runner: &FakeHookRunner::new(),
+            },
+        );
+        assert!(result.is_err());
+        assert!(*store.prepared.borrow(), "ensure_target was attempted");
+        assert!(!*store.cleaned.borrow(), "prepare failure must not trigger cleanup");
     }
 }

@@ -1572,3 +1572,179 @@ fn apply_fails_on_broken_symlinked_hook_script() {
     cmd.assert().failure();
     assert!(!target.exists(), "broken hook script symlink must abort before target creation");
 }
+
+// --- 실패 시 target 정리 e2e ---
+
+/// before 훅이 `exit 1`로 실패하는 템플릿 — 실패 시 target 정리 재현용.
+fn write_failing_before_hook_template(dir: &std::path::Path) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[hooks.before]]
+            run = "exit 1"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "generated").expect("write marker.txt");
+}
+
+#[test]
+fn apply_failure_cleans_up_newly_created_target() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_failing_before_hook_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+    cmd.assert().failure();
+
+    assert!(
+        !target.exists(),
+        "newly created target must be cleaned up after before-hook failure"
+    );
+}
+
+#[test]
+fn apply_failure_preserves_preexisting_target_and_sentinel() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_failing_before_hook_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+    // nested sentinel — 삭제 후 재생성 같은 결함까지 잡도록 하위 디렉토리 안에 심는다.
+    fs::create_dir_all(target.join("nested")).expect("precreate nested");
+    fs::write(target.join("nested").join("deep.txt"), "user-data").expect("nested sentinel");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+    cmd.assert().failure();
+
+    assert_eq!(
+        fs::read_to_string(target.join("nested").join("deep.txt")).expect("nested sentinel must survive"),
+        "user-data",
+        "pre-existing target and nested user data must be preserved on failure"
+    );
+}
+
+#[test]
+fn apply_no_cleanup_flag_preserves_created_target_on_failure() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_failing_before_hook_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes")
+        .arg("--no-cleanup-on-failure");
+    cmd.assert().failure();
+
+    assert!(
+        target.exists(),
+        "--no-cleanup-on-failure must preserve the created target"
+    );
+}
+
+#[test]
+fn apply_failure_cleanup_does_not_touch_sibling() {
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_failing_before_hook_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+    let sibling = workdir.path().join("sibling.txt");
+    fs::write(&sibling, "keep-sibling").expect("sibling sentinel");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+    cmd.assert().failure();
+
+    assert!(!target.exists(), "created target must be cleaned up");
+    assert_eq!(
+        fs::read_to_string(&sibling).expect("sibling must survive"),
+        "keep-sibling",
+        "cleanup must touch only the prepared target root, not siblings"
+    );
+}
+
+#[test]
+fn apply_with_dotdot_in_target_applies_at_normalized_effective_path() {
+    // `..`를 포함한 target도 실효 경로에 정상 적용된다 — target_root를 apply 경계에서 한 번
+    // 정규화하므로 훅 cwd·write·ensure·cleanup이 모두 같은 경로(base/demo)를 쓴다.
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("sub").join("..").join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--answers")
+        .arg("project=demo");
+    cmd.assert().success();
+
+    let effective = workdir.path().join("demo");
+    assert_eq!(
+        fs::read_to_string(effective.join("README.md")).expect("README at effective path"),
+        "# demo"
+    );
+    assert!(
+        !workdir.path().join("sub").exists(),
+        "`..` resolution must not create a sibling directory"
+    );
+}
+
+/// after 훅이 `exit 1`로 실패하는 템플릿 — write 성공 후 정리(산출물 포함) 재현용.
+fn write_failing_after_hook_template(dir: &std::path::Path) {
+    fs::write(
+        dir.join("scaffold.toml"),
+        r#"
+            [[hooks.after]]
+            run = "exit 1"
+        "#,
+    )
+    .expect("write scaffold.toml");
+    let files = dir.join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "generated").expect("write marker.txt");
+}
+
+#[test]
+fn apply_after_hook_failure_cleans_up_created_target_with_contents() {
+    // write가 완료돼 marker.txt가 배치된 뒤 after-hook이 실패해도 신규 target이 통째 정리된다.
+    let template = tempfile::tempdir().expect("template tempdir");
+    write_failing_after_hook_template(template.path());
+    let workdir = tempfile::tempdir().expect("workdir tempdir");
+    let target = workdir.path().join("demo");
+
+    let mut cmd = Command::cargo_bin("scaffolder").expect("binary");
+    cmd.current_dir(workdir.path())
+        .arg("apply")
+        .arg(template.path())
+        .arg(&target)
+        .arg("--yes");
+    cmd.assert().failure();
+
+    assert!(
+        !target.exists(),
+        "created target with generated contents must be cleaned up on after-hook failure"
+    );
+}

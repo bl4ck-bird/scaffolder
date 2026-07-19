@@ -9,7 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::domain::place::{safe_rel_path, DestStatus, FileMode, PayloadEntry, PayloadStore, RelPath};
+use crate::domain::place::{
+    normalize_target, safe_rel_path, DestStatus, FileMode, PayloadEntry, PayloadStore, RelPath,
+    TargetPreparation,
+};
 
 /// 파일시스템 기반 `PayloadStore`: payload 읽기 + target에 containment·심링크 방어 하에 쓰기.
 pub struct FsPayloadStore;
@@ -44,9 +47,42 @@ impl PayloadStore for FsPayloadStore {
             .with_context(|| format!("failed to read payload file {}", path.display()))
     }
 
-    fn ensure_target(&self, target_root: &Path) -> Result<()> {
-        fs::create_dir_all(target_root)
-            .with_context(|| format!("failed to create target directory {}", target_root.display()))
+    fn ensure_target(&self, target_root: &Path) -> Result<TargetPreparation> {
+        // 경로를 lexical 정규화해 실효 target을 확정한 뒤, 그 부모만 준비하고 최종 컴포넌트를
+        // 배타적으로 생성한다. `exists()` 후 `create_dir_all` 방식은 `..` 경로와 create-race를
+        // 신규로 오판정해 사전 존재 사용자 데이터를 삭제할 수 있다(배타적 create_dir로 원천 차단).
+        let effective = normalize_target(target_root);
+        if let Some(parent) = effective.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create parent of target {}", effective.display())
+            })?;
+        }
+        match fs::create_dir(&effective) {
+            Ok(()) => Ok(TargetPreparation::Created),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                // 이미 있는 것이 실제 디렉토리(또는 디렉토리를 가리키는 symlink)여야 target으로 쓸 수
+                // 있다. `metadata`는 symlink를 follow하므로 broken/비-디렉토리 symlink는 오류가 된다.
+                // 어느 경우든 우리가 만들지 않았으므로 정리 대상이 아니다.
+                let meta = fs::metadata(&effective).with_context(|| {
+                    format!("target {} exists but could not be inspected", effective.display())
+                })?;
+                if meta.is_dir() {
+                    Ok(TargetPreparation::Existing)
+                } else {
+                    bail!("target {} exists and is not a directory", effective.display())
+                }
+            }
+            Err(e) => Err(anyhow!(e))
+                .with_context(|| format!("failed to create target directory {}", effective.display())),
+        }
+    }
+
+    fn cleanup_target(&self, target_root: &Path) -> Result<()> {
+        // ensure_target과 동일하게 정규화한 실효 경로만 삭제한다 — 렌더 경로가 아니라 준비된 그
+        // target root에만 호출된다(호출부 pipeline이 Created일 때만 부른다).
+        let effective = normalize_target(target_root);
+        fs::remove_dir_all(&effective)
+            .with_context(|| format!("failed to clean up target directory {}", effective.display()))
     }
 
     fn write_file(
@@ -305,6 +341,144 @@ fn walk(
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn ensure_target_reports_created_for_new_dir() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let target = base.path().join("newproj");
+        let prep = FsPayloadStore.ensure_target(&target).expect("ensure");
+        assert_eq!(prep, TargetPreparation::Created);
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn ensure_target_reports_existing_and_preserves_contents() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let target = base.path().join("existing");
+        fs::create_dir(&target).expect("mkdir");
+        fs::write(target.join("sentinel"), b"keep").expect("sentinel");
+        let prep = FsPayloadStore.ensure_target(&target).expect("ensure");
+        assert_eq!(prep, TargetPreparation::Existing);
+        assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn ensure_target_normalizes_dots_and_does_not_create_sibling() {
+        // base/missing/../preexisting에서 preexisting만 존재 → 실효 target=base/preexisting=Existing,
+        // sibling base/missing은 생성되지 않아야 한다.
+        let base = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(base.path().join("preexisting")).expect("mkdir preexisting");
+        let target = base.path().join("missing").join("..").join("preexisting");
+        let prep = FsPayloadStore.ensure_target(&target).expect("ensure");
+        assert_eq!(prep, TargetPreparation::Existing);
+        assert!(!base.path().join("missing").exists(), "sibling must not be created");
+    }
+
+    #[test]
+    fn ensure_target_errors_when_final_component_is_a_file_and_keeps_it() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let target = base.path().join("afile");
+        fs::write(&target, b"data").expect("write file");
+        let result = FsPayloadStore.ensure_target(&target);
+        assert!(result.is_err(), "file at target must be an error");
+        assert!(target.is_file(), "the file must not be deleted");
+        assert_eq!(fs::read(&target).expect("file survives"), b"data", "file contents intact");
+    }
+
+    #[test]
+    fn ensure_target_errors_on_file_symlink_and_keeps_it() {
+        // 최종 컴포넌트가 파일을 가리키는 symlink → create_dir AlreadyExists, metadata(follow)가
+        // 파일이라 오류. symlink와 대상 파일 모두 보존(우리가 만들지 않음).
+        let base = tempfile::tempdir().expect("tempdir");
+        let real = base.path().join("real_file");
+        fs::write(&real, b"data").expect("write real file");
+        let target = base.path().join("link");
+        symlink(&real, &target).expect("file symlink");
+        let result = FsPayloadStore.ensure_target(&target);
+        assert!(result.is_err(), "symlink to a file must be a prepare error");
+        assert!(target.symlink_metadata().is_ok(), "the symlink must not be deleted");
+        assert_eq!(fs::read(&real).expect("target file survives"), b"data");
+    }
+
+    #[test]
+    fn ensure_target_errors_on_broken_symlink_and_keeps_it() {
+        // broken symlink → create_dir AlreadyExists, metadata(follow)가 ENOENT → 오류. 보존.
+        let base = tempfile::tempdir().expect("tempdir");
+        let target = base.path().join("broken");
+        symlink(base.path().join("nonexistent"), &target).expect("broken symlink");
+        let result = FsPayloadStore.ensure_target(&target);
+        assert!(result.is_err(), "broken symlink must be a prepare error");
+        assert!(target.symlink_metadata().is_ok(), "the broken symlink must not be deleted");
+    }
+
+    #[test]
+    fn ensure_target_reports_existing_for_directory_symlink_and_preserves_contents() {
+        // 디렉토리를 가리키는 symlink → AlreadyExists, metadata(follow) is_dir → Existing.
+        // 정리 대상이 아니므로 symlink 대상 디렉토리의 내용은 보존된다.
+        let base = tempfile::tempdir().expect("tempdir");
+        let real = base.path().join("real_dir");
+        fs::create_dir(&real).expect("mkdir real dir");
+        fs::write(real.join("sentinel"), b"keep").expect("sentinel");
+        let target = base.path().join("dirlink");
+        symlink(&real, &target).expect("dir symlink");
+        let prep = FsPayloadStore.ensure_target(&target).expect("dir symlink resolves to Existing");
+        assert_eq!(prep, TargetPreparation::Existing);
+        assert_eq!(fs::read(real.join("sentinel")).expect("contents survive"), b"keep");
+    }
+
+    #[test]
+    fn cleanup_target_removes_exact_prepared_path() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let target = base.path().join("proj");
+        fs::create_dir(&target).expect("mkdir");
+        fs::write(target.join("f"), b"x").expect("write");
+        FsPayloadStore.cleanup_target(&target).expect("cleanup");
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn cleanup_target_leaves_parent_and_sibling_untouched() {
+        // 정리는 exact prepared root에만 국한 — parent 파일과 sibling 디렉토리의 sentinel은 불변.
+        let base = tempfile::tempdir().expect("tempdir");
+        let target = base.path().join("proj");
+        fs::create_dir(&target).expect("mkdir target");
+        fs::write(target.join("f"), b"x").expect("write in target");
+        fs::write(base.path().join("parent_sentinel"), b"parent").expect("parent sentinel");
+        let sibling = base.path().join("sibling");
+        fs::create_dir(&sibling).expect("mkdir sibling");
+        fs::write(sibling.join("s"), b"sib").expect("sibling sentinel");
+
+        FsPayloadStore.cleanup_target(&target).expect("cleanup");
+
+        assert!(!target.exists(), "target removed");
+        assert_eq!(
+            fs::read(base.path().join("parent_sentinel")).expect("parent survives"),
+            b"parent"
+        );
+        assert_eq!(fs::read(sibling.join("s")).expect("sibling survives"), b"sib");
+    }
+
+    #[test]
+    fn cleanup_target_does_not_follow_symlink_to_external_dir() {
+        // target 안에 외부 디렉토리를 가리키는 symlink가 있어도, remove_dir_all은 symlink를 따라가지
+        // 않고 unlink만 하므로 외부 대상은 보존된다.
+        let base = tempfile::tempdir().expect("tempdir");
+        let external = base.path().join("external");
+        fs::create_dir(&external).expect("mkdir external");
+        fs::write(external.join("keep"), b"external-data").expect("external sentinel");
+        let target = base.path().join("proj");
+        fs::create_dir(&target).expect("mkdir target");
+        symlink(&external, target.join("link")).expect("symlink to external dir");
+
+        FsPayloadStore.cleanup_target(&target).expect("cleanup");
+
+        assert!(!target.exists(), "target removed");
+        assert_eq!(
+            fs::read(external.join("keep")).expect("external survives"),
+            b"external-data",
+            "cleanup must not follow the symlink into the external directory"
+        );
+    }
 
     #[test]
     fn list_entries_enumerates_files_and_dirs_recursively() {

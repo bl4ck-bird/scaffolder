@@ -119,9 +119,17 @@ A template can also include:
 | `--trust` | allow reading control files reached by a symlink that points outside the template (default: refuse) |
 | `--dry-run` | print the write plan without touching the filesystem |
 | `--template-dir <path>` | directory to resolve a template name against, before the default store locations |
+| `--no-cleanup-on-failure` | keep a newly created target if `apply` fails partway (default: the target is removed) |
 
 Running without `--force` against an existing file fails unless you are at
 an interactive terminal and confirm the overwrite.
+
+If `apply` creates a new target directory and then fails (a failing hook, a
+write error), that directory is removed so no half-written project is left
+behind; a target that already existed is always preserved. Pass
+`--no-cleanup-on-failure` to keep the partial output instead. Cleanup is
+best-effort — it does not cover interruption by a signal, `SIGKILL`, or power
+loss.
 
 ### Example
 

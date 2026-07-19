@@ -295,8 +295,15 @@ mod tests {
             Ok(self.contents.get(&entry.rel.to_string()).cloned().unwrap_or_default())
         }
 
-        fn ensure_target(&self, _target_root: &Path) -> Result<()> {
+        fn ensure_target(
+            &self,
+            _target_root: &Path,
+        ) -> Result<crate::domain::place::TargetPreparation> {
             unreachable!("validate must never write to a target")
+        }
+
+        fn cleanup_target(&self, _target_root: &Path) -> Result<()> {
+            unreachable!("validate must never clean up a target")
         }
 
         fn write_file(

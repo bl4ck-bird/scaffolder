@@ -45,6 +45,25 @@ pub fn safe_rel_path(input: &str) -> Result<RelPath> {
     Ok(RelPath(normalized))
 }
 
+/// target 절대경로를 lexical 정규화한다(`.`/`..` 해소, symlink는 해소하지 않음). 실효 target
+/// 경로를 확정해, `..`를 포함한 입력이 (a) sibling에 예기치 않은 빈 디렉토리를 만들거나
+/// (b) 신규/기존 판정을 오도하는 것을 막는다. `..`는 루트 위로 올라가지 않는다.
+pub fn normalize_target(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 /// Unix permission bits: `0o666` base → executable `|0o111` → private `&^0o77` →
 /// readonly `&^0o222`. 특수비트 없음.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,12 +129,29 @@ pub struct DestStatus {
     pub is_symlink: bool,
 }
 
+/// `ensure_target`의 결과. target을 우리가 만들었는지(실패 시 정리 대상) 사전에 존재했는지
+/// (보존)를 구분한다. `exists()` 대신 최종 컴포넌트 배타적 생성으로 판정하므로 `..`/create-race
+/// 오판정이 없다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetPreparation {
+    /// 이번 실행이 최종 컴포넌트를 새로 만들었다 → 실패 시 정리 대상.
+    Created,
+    /// 최종 컴포넌트가 이미 있었다 → 실패해도 정리하지 않는다(사용자 데이터).
+    Existing,
+}
+
 /// payload 열거/읽기 + target 쓰기 포트. infra가 구현한다.
 pub trait PayloadStore {
     fn list_entries(&self, source_root: &Path) -> Result<Vec<PayloadEntry>>;
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>>;
-    /// target 디렉토리를 보장한다(부재 시 생성). plan 이후 write 직전에 호출한다.
-    fn ensure_target(&self, target_root: &Path) -> Result<()>;
+    /// target 디렉토리를 준비한다(plan 이후 write 직전 호출). 경로를 lexical 정규화한 뒤 실효
+    /// 경로의 부모를 만들고 최종 컴포넌트를 배타적으로 생성해, 새로 만들었으면 `Created`, 이미
+    /// 있었으면 `Existing`을 반환한다. 최종 위치에 디렉토리가 아닌 것(파일·비-디렉토리 symlink)이
+    /// 있으면 오류(우리가 만들지 않았으므로 정리 대상 아님).
+    fn ensure_target(&self, target_root: &Path) -> Result<TargetPreparation>;
+    /// 준비 단계가 만든 exact target 경로를 재귀 삭제한다(실패 정리용). 렌더 경로가 아니라
+    /// 준비된 target root에만 호출한다.
+    fn cleanup_target(&self, target_root: &Path) -> Result<()>;
     /// payload 파일 하나를 원자적으로 쓴다. `overwrite`가 false면 dest가 새로 생겨야 하며, 경쟁으로
     /// dest가 먼저 생기면 조용히 덮지 않고 실패한다(no-clobber). true면 기존 dest를 원자 교체한다.
     fn write_file(
@@ -209,5 +245,18 @@ mod tests {
             FileMode::from_modes(&[Mode::Executable, Mode::Private]).bits(),
             0o700
         );
+    }
+
+    #[test]
+    fn normalize_target_resolves_parent_and_cur_dir() {
+        assert_eq!(normalize_target(Path::new("/tmp/new/../existing")), PathBuf::from("/tmp/existing"));
+        assert_eq!(normalize_target(Path::new("/a/b/./c")), PathBuf::from("/a/b/c"));
+        assert_eq!(normalize_target(Path::new("/a/b/..")), PathBuf::from("/a"));
+        assert_eq!(normalize_target(Path::new("/a/b")), PathBuf::from("/a/b"));
+    }
+
+    #[test]
+    fn normalize_target_does_not_climb_above_root() {
+        assert_eq!(normalize_target(Path::new("/a/../..")), PathBuf::from("/"));
     }
 }
