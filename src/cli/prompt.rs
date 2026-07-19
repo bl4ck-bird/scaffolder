@@ -118,7 +118,7 @@ fn choice_labels(question: &Question) -> Vec<String> {
     question.choices.iter().map(|c| c.label.clone()).collect()
 }
 
-/// Selected index (into the inquire label list) → the original choice's literal value.
+/// Maps the selected index (into the inquire label list) back to the original choice's literal value.
 fn resolve_choice_value(question: &Question, index: usize) -> Result<AnswerValue> {
     question
         .choices

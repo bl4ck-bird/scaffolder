@@ -31,8 +31,10 @@ pub fn collect_active_inline<'a>(
     Ok(active)
 }
 
-/// Description for the single pre-side-effect confirm gate. Lists before then after, each as
-/// inline (declaration order) followed by folder scripts (lexical), one per line.
+/// Builds the text shown at the single confirmation gate, which runs once before any side
+/// effect. It lists the before-phase hooks and then the after-phase hooks; within each phase the
+/// inline hooks come first (in declaration order), followed by the folder scripts (in lexical
+/// order), one per line.
 pub fn confirm_description(
     before_inline: &[&Hook],
     before_scripts: &[HookScript],
@@ -69,10 +71,11 @@ fn script_name(script: &HookScript) -> &str {
     }
 }
 
-/// The confirm prompt is the only guard before arbitrary code runs, so escape control
-/// characters (CR, ANSI escapes, …) an untrusted template author might use to spoof the
-/// terminal display. Printable and non-ASCII characters are preserved (`str::escape_default`
-/// over-escapes those, so it is not used).
+/// This text is shown at the confirmation prompt, which is the last thing standing between an
+/// untrusted template and running arbitrary code. So escape any control characters — a carriage
+/// return, an ANSI escape sequence, and the like — that a template author could otherwise use to
+/// spoof what the terminal displays. Printable and non-ASCII characters are left untouched; we
+/// avoid `str::escape_default` because it would over-escape those as well.
 fn sanitize_for_display(s: &str) -> String {
     s.chars()
         .flat_map(|c| {

@@ -83,9 +83,10 @@ pub struct ApplyArgs {
 pub fn run(args: ApplyArgs) -> Result<()> {
     let store = FsTemplateStore::new(args.template_dir.clone());
     let template_root = store.resolve(&args.template)?;
-    // If `.scaffoldroot` is itself an external symlink, `FsSourceRootSource::resolve`
-    // would read its contents (the effective source-root selection) before `--trust`
-    // is wired in — guard it here first, relative to the original template_root.
+    // `.scaffoldroot` can itself be a symlink. If it points outside the template,
+    // `FsSourceRootSource::resolve` below would read its contents — which choose the effective
+    // source root — before the `--trust` gate is even wired up. So check it here first, against
+    // the original template_root, before anything reads it.
     let scaffoldroot_marker = template_root.join(".scaffoldroot");
     if scaffoldroot_marker.symlink_metadata().is_ok() {
         let template_root_canon = template_root
@@ -104,11 +105,12 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         )
     })?;
     let trust = args.trust;
-    // Settle the effective target once at the composition root: `std::path::absolute`
-    // preserves `..` lexically, so normalize immediately, giving every later consumer
-    // (hook cwd, dest_status, write_file, ensure_target, cleanup_target) the same path.
-    // Partial normalization splits a `..` target between prepare (normalized) and
-    // write/hook (raw), which makes apply fail on an otherwise valid target.
+    // Settle the effective target path once, here at the composition root. `std::path::absolute`
+    // keeps any `..` in the path (it only makes the path absolute, without resolving it), so
+    // normalize it right away and hand the same settled path to every later step — the hook cwd,
+    // dest_status, write_file, ensure_target, and cleanup_target. If we normalized in some places
+    // but not others, a `..` target would be seen as one path while preparing and a different one
+    // while writing or running hooks, and apply would fail on a target that is actually fine.
     let target_root = std::path::absolute(PathBuf::from(&args.target))
         .with_context(|| format!("failed to resolve target path {:?}", args.target))?;
     let target_root = normalize_target(&target_root);

@@ -371,8 +371,9 @@ fn apply_answers_flag_overrides_answers_file() {
 
     cmd.assert().success();
 
-    // project from --answers (override); port from --answers-file (5000 >= 3000 → high);
-    // verbose is in neither, so it falls to its default (false → q).
+    // project comes from --answers, which overrides the file; port comes from --answers-file,
+    // where 5000 >= 3000 selects "high"; verbose is supplied by neither, so it falls back to its
+    // default of false, which renders as "q".
     let content = fs::read_to_string(target.join("config.txt")).expect("read config.txt");
     assert_eq!(content, "cliproj:high:q");
 }
@@ -919,10 +920,10 @@ fn apply_dedup_lines_over_included_partial() {
 
 #[test]
 fn apply_when_cannot_reference_data() {
-    // data is merged (step 3) only after answers are finalized (step 2), so `when` cannot see the
-    // data namespace at all. Not just member access (`data.flag`) but a bare namespace reference
-    // (`not data`) must fail as undefined (exposing an empty table would let `not data` succeed and
-    // bypass — this locks that bypass out).
+    // Data is merged only after all answers are finalized, so a `when` condition runs before the
+    // data namespace exists at all. The render must reject not only member access like `data.flag`
+    // but also a bare reference like `not data`: if we exposed data as an empty table instead,
+    // `not data` would evaluate to true and quietly slip past the guard. This test locks that door.
     let template = tempfile::tempdir().expect("template tempdir");
     fs::write(
         template.path().join("scaffold.toml"),
@@ -1016,10 +1017,10 @@ fn apply_applies_mode_prefix_permissions() {
             & 0o777
     };
 
-    // Check only the umask-independent "bits are cleared" invariants (umask only removes further
-    // bits, so a "set" assertion would be environment-dependent). These clear invariants are
-    // positive evidence of mode application — they show bits that base (0o644) would have left set
-    // were removed. Exact bit values are locked by the domain from_modes test.
+    // Only assert on bits that were cleared, since those hold regardless of the umask: the umask
+    // can only clear bits further, so asserting that a bit is set would depend on the environment.
+    // Seeing bits removed that base mode 0o644 would have left set is positive evidence that the
+    // mode was applied at all; the exact resulting bits are pinned down by the domain from_modes test.
     assert_eq!(
         mode("secret.txt") & 0o077,
         0,
@@ -1316,9 +1317,9 @@ fn write_jinja_folder_hook_template(dir: &std::path::Path) {
     fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
 }
 
-/// E2E regression: a `.jinja` folder hook must go through the real MiniJinja render → temp file →
-/// exec chain with the answer context (piecewise unit tests alone don't prove the render context is
-/// actually threaded through).
+/// E2E regression: a `.jinja` folder hook has to run through the whole real chain — render it with
+/// MiniJinja, write it to a temp file, then execute it — carrying the answer context all the way
+/// through. Piecewise unit tests alone don't prove that context is actually threaded end to end.
 #[test]
 fn apply_jinja_folder_hook_renders_with_answer_context_and_executes() {
     let template = tempfile::tempdir().expect("template tempdir");

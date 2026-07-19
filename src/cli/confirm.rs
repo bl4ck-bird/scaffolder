@@ -5,10 +5,11 @@ use std::path::Path;
 
 use crate::domain::hook::Confirmer;
 
-/// tty-prompt-based `Confirmer`. `force` is an overwrite-only gate — it prompts only
-/// when interactive and refuses when non-interactive (an unapproved write is a security
-/// surface that must become an error). `yes` bypasses hook confirmation only — it plays
-/// no part in overwrite or external-write decisions.
+/// A `Confirmer` that asks through a tty prompt. `force` applies only to overwrites: without it,
+/// an overwrite is confirmed interactively and refused when there is no tty, because letting an
+/// unapproved write through silently would be a security hole, so it must turn into an error
+/// instead. `yes` applies only to hook confirmation and has no bearing on overwrite or
+/// external-write decisions.
 pub struct StdConfirmer {
     pub force: bool,
     pub interactive: bool,
@@ -61,8 +62,8 @@ impl Confirmer for StdConfirmer {
     }
 
     fn confirm_external_write(&self, path: &Path) -> bool {
-        // Escaping containment cannot be bypassed by `--force` (overwrite-only) — it
-        // always requires tty approval.
+        // A write that escapes containment can never be waved through by `--force`, which only
+        // covers overwrites; it always needs interactive tty approval.
         self.tty_prompt(&format!("write outside target at {}?", path.display()))
     }
 }

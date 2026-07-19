@@ -37,10 +37,12 @@ impl HookRunner for StdHookRunner {
         cwd: &Path,
         env: &BTreeMap<String, String>,
     ) -> Result<()> {
-        // If `path` is relative (from a relative template root), whether `Command::current_dir(cwd)`
-        // chdirs the child before exec is platform-dependent, so a relative program path could
-        // resolve ENOENT against `cwd` (target). Making it absolute pins it to this process's real
-        // cwd (the base of the relative template argument), finding the right script regardless of `cwd`.
+        // `path` may be relative, because the template root itself can be given as a relative
+        // path. Whether `Command::current_dir(cwd)` changes into `cwd` before or after it resolves
+        // the program is platform-dependent, so a relative program could end up looked up against
+        // `cwd` (the target directory) and fail with ENOENT. Resolving it to an absolute path
+        // first pins it to this process's actual working directory — the base that the relative
+        // template argument was given against — so the right script is found no matter what `cwd` is.
         let program = std::path::absolute(path)
             .with_context(|| format!("failed to resolve hook script path {}", path.display()))?;
 
@@ -91,13 +93,15 @@ impl HookRunner for StdHookRunner {
 /// Process-local counter for the unique temp-file suffix.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Secure temp hook-script guard. Removes the file in `Drop` on any path — exec success,
-/// failure, or early return (Rust has no `defer`, so RAII guarantees cleanup).
+/// A guard for a secure temporary hook script. Its `Drop` removes the file on every exit path —
+/// whether exec succeeds, fails, or we return early — because Rust has no `defer`, so RAII is how
+/// we make sure the temp file is always cleaned up.
 struct TempScript(PathBuf);
 
 impl TempScript {
-    /// Creates a unique file in `env::temp_dir()` with `create_new` (O_EXCL, no symlink follow)
-    /// and `mode(0o700)` (owner-only) and writes `content`. `name` is normalized by `sanitize_name`.
+    /// Creates a unique file in `env::temp_dir()` and writes `content` to it. It is opened with
+    /// `create_new` (O_EXCL, which fails rather than following a symlink or reusing an existing
+    /// file) and mode `0o700` (owner-only). `name` is first normalized by `sanitize_name`.
     fn create(name: &str, content: &[u8]) -> Result<Self> {
         use std::io::ErrorKind;
         use std::os::unix::fs::OpenOptionsExt;
@@ -105,9 +109,10 @@ impl TempScript {
         let sanitized = sanitize_name(name);
         let pid = std::process::id();
 
-        // On a collision with a leftover same-name temp file (PID reuse + a prior process
-        // SIGKILLed before Drop could clean up), keep bumping the counter and retry. Other errors
-        // (permissions, etc.) will not resolve on retry, so treat them as immediately fatal.
+        // A name collision can happen if an earlier process with the same PID was SIGKILLed before
+        // its Drop ran, leaving a temp file of the same name behind. In that case we keep bumping
+        // the counter and try again. Any other error (a permissions problem, say) will not fix
+        // itself on retry, so we fail immediately.
         const MAX_ATTEMPTS: u32 = 1000;
         let mut last_err = None;
         for _ in 0..MAX_ATTEMPTS {
@@ -165,12 +170,12 @@ impl Drop for TempScript {
     }
 }
 
-/// Replaces every character that is not alphanumeric or `.`/`-`/`_` with `_`. Traversal is
-/// blocked not by this replacement (`.` is allowed, so `..` survives) but by the invariant that
-/// the caller (`TempScript::create`) always prefixes the result with
-/// `scaffolder-hook-<pid>-<counter>-`, pinning the final path to a single file-name component,
-/// and that `name` only ever comes from `FsHookSource::scripts`'s `read_dir` file_name (likewise
-/// a single component).
+/// Replaces every character that is not alphanumeric or `.`, `-`, or `_` with `_`. On its own
+/// this does not stop path traversal: `.` is allowed, so a name like `..` survives unchanged.
+/// What actually keeps the path safe are two invariants around the caller. First,
+/// `TempScript::create` always prepends `scaffolder-hook-<pid>-<counter>-`, so the result is a
+/// single file-name component with no way to point elsewhere. Second, `name` only ever comes
+/// from a `read_dir` file name in `FsHookSource::scripts`, which is itself a single component.
 fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -183,9 +188,11 @@ fn sanitize_name(name: &str) -> String {
         .collect()
 }
 
-/// Filesystem `HookSource`: enumerates `hooks/<before|after>/` in byte-lexical file-name order.
-/// Symlinks are followed to inspect the target (an internal symlink→file must stay runnable, so
-/// it is not skipped); each script path is rejected without `trust` if it is an external symlink.
+/// Filesystem-backed `HookSource`. It lists the scripts in `hooks/before/` or `hooks/after/` in
+/// byte-lexical order by file name. Symlinks are followed so their target can be inspected,
+/// because a symlink inside the template that points at a real file is a legitimate hook and
+/// must stay runnable. Any script whose path is a symlink pointing outside the template is
+/// rejected unless the caller passed `trust`.
 pub struct FsHookSource {
     pub root_canon: PathBuf,
     pub trust: bool,
@@ -202,9 +209,11 @@ impl HookSource for FsHookSource {
         if !dir.exists() {
             return Ok(Vec::new());
         }
-        // The leaf guard (below) only runs after read_dir has already followed the symlink and
-        // enumerated, so a fileless external-symlink phase dir would slip past it entirely — guard
-        // the dir itself before read_dir to guarantee default-reject regardless of contents.
+        // The per-file guard further down only runs once `read_dir` has already followed the
+        // symlink and listed the directory's contents. That means an external symlink pointing at
+        // an empty directory would never reach the per-file guard and would slip through. To close
+        // that gap, check the phase directory itself before calling `read_dir`, so an external
+        // symlink is rejected by default no matter what it contains.
         ensure_within_root(&dir, &self.root_canon, self.trust)?;
 
         let mut names: Vec<String> = Vec::new();
@@ -214,8 +223,9 @@ impl HookSource for FsHookSource {
             let entry =
                 entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
             let path = entry.path();
-            // Decide by following: no-follow (`file_type()`) would skip an internal symlink→file
-            // hook. A broken symlink is fail-loud (silently skipping would drop an intended hook).
+            // Follow the symlink to decide, rather than using `file_type()`, which does not follow
+            // and would skip a hook that is a symlink to a real file. A broken symlink is treated
+            // as a hard error: silently skipping it would drop a hook the author intended to run.
             match fs::metadata(&path) {
                 Ok(meta) if meta.is_file() => {}
                 Ok(_) => continue,

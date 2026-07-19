@@ -47,10 +47,12 @@ pub fn merge(base: DataValue, overlay: DataValue) -> DataValue {
     }
 }
 
-/// Port deep-merging `data/*.toml` onto `base` in lexical order. `base` is the manifest
-/// `[data]`; merging is a single left-fold `[data] ▷ f1 ▷ f2 …` — deep-merge is not
-/// associative across table→scalar→table, so files must not be merged together first.
-/// Implemented by infra via TOML parsing.
+/// Deep-merges the `data/*.toml` files onto `base` in lexical order by file name. `base` is the
+/// manifest's `[data]` table. The merge is a single left-fold: `base` is merged with the first
+/// file, that result is merged with the second, and so on. It has to be done in this order,
+/// rather than merging the files together first and then onto `base`, because deep-merge is not
+/// associative — when a table is replaced by a scalar and then by a table again, the grouping
+/// changes the result. Implemented by infra via TOML parsing.
 pub trait DataSource {
     fn load(&self, template_root: &Path, base: DataValue) -> Result<DataValue>;
 }

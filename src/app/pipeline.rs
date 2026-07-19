@@ -228,9 +228,10 @@ fn plan_writes(
     Ok(planned)
 }
 
-/// Runs every side effect after prepare, in order: before hooks → writes (per-entry
-/// containment/overwrite/external-write gates) → after hooks. Returns the first `Err`; the
-/// caller (`cleanup_created_target_on_failure`) decides whether to clean up.
+/// Runs every side effect once the target is prepared, in order: the before hooks, then the
+/// writes (each one subject to its own containment, overwrite, and external-write checks), then
+/// the after hooks. It returns the first error it hits and leaves the decision of whether to
+/// clean up to its caller, `cleanup_created_target_on_failure`.
 fn execute_side_effects(
     req: &ApplyRequest,
     planned: &[PlannedWrite],
@@ -293,10 +294,14 @@ fn execute_side_effects(
     Ok(())
 }
 
-/// Cleanup guard for post-prepare side effects. Only when `outcome` is `Err`, the target was
-/// `Created`, and cleanup is on does it best-effort delete, then propagate the **original**
-/// error (a cleanup failure only warns). `Existing` targets and cleanup-off preserve partial
-/// output; `Ok` passes through. A prepare failure occurs before this call, so it is not cleaned.
+/// Decides what to do with the target after the side effects have run. It cleans up only when
+/// three things are true at once: the run failed, we were the ones who created the target, and
+/// cleanup is enabled. In that case it deletes the target on a best-effort basis and then
+/// re-raises the **original** error, so a failure during cleanup is only warned about and never
+/// hides what actually went wrong. A target that already existed, or a run with cleanup turned
+/// off, keeps whatever was written so far; a successful run passes straight through. A failure
+/// while preparing the target happens before this function is called, so there is nothing to
+/// clean up here.
 fn cleanup_created_target_on_failure(
     outcome: Result<()>,
     prep: TargetPreparation,
@@ -317,9 +322,10 @@ fn cleanup_created_target_on_failure(
     Err(e)
 }
 
-/// Resolves answers by processing questions incrementally in declaration order. For each
-/// question, `when` is evaluated against only the answers resolved so far + builtins (a later
-/// question is not yet in context, so referencing it errors).
+/// Resolves the answer for each question, walking the questions in declaration order. A
+/// question's `when` condition is evaluated against only the answers resolved so far, plus the
+/// builtins; a question further down the list is not in the context yet, so a `when` that refers
+/// to one is an error.
 ///
 /// - No `when`, or active `when`: resolve by this precedence and insert.
 ///   1. `--answers` (raw string, type-converted with `coerce`)

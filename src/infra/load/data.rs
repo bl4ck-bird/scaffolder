@@ -9,11 +9,13 @@ use crate::domain::data::{DataSource, DataValue, merge};
 use crate::infra::load::toml_to_data_value;
 use crate::infra::load::trust::ensure_within_root;
 
-/// Single left-folds `<template_root>/data/*.toml` (lexical order by name) onto `base` (the
-/// manifest `[data]`). Absent `data/` → `base` unchanged. Read/metadata errors propagate rather
-/// than being swallowed (no proceeding on incomplete static data). An external-symlink `data/`
-/// directory is rejected without `trust` (`read_dir` follows a dir symlink); leaf symlinks inside
-/// are still skipped via `file_type()` (no-follow) — not an external read surface.
+/// Merges `<template_root>/data/*.toml` onto `base` (the manifest `[data]`), folding the files in
+/// one pass in lexical order by name. If there is no `data/` directory, `base` is returned
+/// unchanged. Read and metadata errors are propagated rather than swallowed, so we never proceed
+/// with static data that only partially loaded. If `data/` itself is a symlink pointing outside
+/// the template it is rejected unless the caller passed `trust`, because `read_dir` follows a
+/// directory symlink. Symlinks among the files inside are simply skipped, since `file_type()`
+/// does not follow them, so they are not a way to read outside the template.
 pub struct FsDataSource {
     pub root_canon: PathBuf,
     pub trust: bool,
@@ -102,8 +104,10 @@ mod tests {
 
     #[test]
     fn single_fold_does_not_resurrect_replaced_values() {
-        // base(manifest) settings.a=1 → a.toml settings="reset" (table→scalar) → b.toml settings.b=2.
-        // Canonical order gives {settings:{b:2}}. Merging files together before base would resurrect a (wrong).
+        // Fold order: base (manifest) has settings.a=1, then a.toml sets settings="reset" (a table
+        // becomes a scalar), then b.toml sets settings.b=2. Applied in that order the result is
+        // {settings:{b:2}}. If the two files were merged with each other first and only then onto
+        // base, the base's a=1 would come back — the wrong answer.
         let dir = TempDir::new().unwrap();
         let data = dir.path().join("data");
         fs::create_dir_all(&data).unwrap();

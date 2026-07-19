@@ -25,8 +25,9 @@ impl MiniJinjaRenderer {
         Self { env }
     }
 
-    /// Registers partials as named templates so `{% include "name" %}` can pull them. include only
-    /// resolves registered names, so including outside `partials/` is impossible (unregistered name = error).
+    /// Registers the partials as named templates so `{% include "name" %}` can pull them in.
+    /// Because `include` only resolves names that were registered, there is no way to include
+    /// anything from outside `partials/`: an unregistered name is simply an error.
     pub fn with_partials(partials: BTreeMap<String, String>) -> Result<Self> {
         let mut env = base_environment();
         env.set_keep_trailing_newline(true);
@@ -89,10 +90,10 @@ impl Default for MiniJinjaSyntaxChecker {
 
 impl SyntaxChecker for MiniJinjaSyntaxChecker {
     fn check_template(&self, source: &str) -> Result<()> {
-        // Register on a fresh scratch environment each call to catch only parse errors — do not
-        // accumulate registered templates (avoids state bleed across repeated validate calls). Raise
-        // the minijinja error as-is into anyhow — its Display already carries "syntax error" and a
-        // location, so don't mask it with extra context.
+        // Use a fresh scratch environment on every call so we only surface parse errors and do not
+        // accumulate registered templates, which would let state bleed across repeated validate
+        // calls. Pass the minijinja error straight through into anyhow: its Display already includes
+        // "syntax error" and a source location, so wrapping it in extra context would only hide that.
         let mut env = base_environment();
         env.add_template_owned("__scaffolder_validate__".to_string(), source.to_string())?;
         Ok(())
@@ -104,9 +105,10 @@ impl SyntaxChecker for MiniJinjaSyntaxChecker {
     }
 }
 
-/// Exposes `AnswerContext` via name-based dynamic lookup. The port offers no full-enumeration
-/// API, so top-level (`{{ name }}`) and `scaffolder.*` lookups are delegated value by value.
-/// Exposed crate-internally to share the context mapping with `when` expression evaluation.
+/// Exposes an `AnswerContext` to the templates through name-by-name dynamic lookup. The port has
+/// no API for enumerating everything at once, so top-level references like `{{ name }}` and
+/// `scaffolder.*` are resolved one value at a time. It is visible within the crate so the same
+/// context mapping can be reused when evaluating `when` expressions.
 #[derive(Debug)]
 pub(crate) struct RenderContext(pub(crate) AnswerContext);
 

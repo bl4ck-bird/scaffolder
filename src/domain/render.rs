@@ -12,9 +12,10 @@ pub trait Renderer {
     fn render_str(&self, template: &str, context: &AnswerContext) -> Result<String>;
 }
 
-/// Port loading `partials/` fragments. `{% include %}` pulls by name, so the renderer must
-/// register them all upfront — hence a name→source map. Names are `partials/`-relative
-/// (`/`-separated); an absent `partials/` yields an empty map.
+/// Port loading the `partials/` fragments. Because `{% include %}` pulls a partial by name, the
+/// renderer has to have them all registered before rendering starts, so they are returned as a
+/// map from name to source. Names are relative to `partials/` and `/`-separated; an absent
+/// `partials/` directory yields an empty map.
 pub trait PartialSource {
     fn load(&self, template_root: &Path) -> Result<BTreeMap<String, String>>;
 }

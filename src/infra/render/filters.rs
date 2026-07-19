@@ -45,8 +45,10 @@ fn dedup_lines(input: &str) -> String {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut kept: Vec<&str> = Vec::new();
     for line in input.split('\n') {
-        // A CRLF payload leaves a trailing `\r`. Strip it from the dedup key so mixed LF/CRLF
-        // (e.g. LF payload + CRLF partial) counts as the same line; the output keeps the original.
+        // A CRLF file leaves a trailing `\r` on each line. Strip it before using the line as the
+        // dedup key, so a line that appears once with LF endings and once with CRLF endings (for
+        // example an LF payload that includes a CRLF partial) counts as the same line. The output
+        // still keeps whichever ending the original line had.
         let key = line.strip_suffix('\r').unwrap_or(line);
         if key.is_empty() || seen.insert(key) {
             kept.push(line);

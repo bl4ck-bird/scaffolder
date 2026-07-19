@@ -28,9 +28,11 @@ pub struct ScaffolderBuiltins {
     pub username: String,
 }
 
-/// Immutable context built only by `build_context` (no public setters). When `data` is
-/// `None` the `data` namespace is absent from the render context, so referencing `data`
-/// in a `when` expression (evaluated before merge) fails as strict-undefined.
+/// An immutable context; the only way to build one is `build_context`, since there are no
+/// public setters. When `data` is `None`, the `data` namespace is not present in the render
+/// context at all. Because a `when` expression is evaluated before data is merged, a `when` that
+/// refers to `data` then fails as a strict-undefined reference rather than quietly seeing an
+/// empty value.
 #[derive(Debug, Clone)]
 pub struct AnswerContext {
     answers: BTreeMap<String, AnswerValue>,
@@ -77,9 +79,10 @@ pub(crate) fn canonical_string(value: &AnswerValue) -> String {
     }
 }
 
-/// Compares a raw `--answers` string against a choice value by parsing it to the choice's
-/// type — `canonical_string` only normalizes display (e.g. `f64` `2.0` → `"2"`), so choice
-/// matching needs a typed comparison.
+/// Compares a raw `--answers` string against a choice value by parsing the string into the
+/// choice's own type. A plain string comparison via `canonical_string` would not do, because it
+/// only normalizes how a value is displayed — for example, the `f64` `2.0` prints as `"2"` — so
+/// matching against a choice needs a comparison that understands the type.
 fn raw_matches_choice(raw: &str, value: &AnswerValue) -> bool {
     match value {
         AnswerValue::Text(s) => raw == s,

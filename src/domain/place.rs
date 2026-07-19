@@ -66,8 +66,9 @@ pub fn normalize_target(path: &Path) -> PathBuf {
     out
 }
 
-/// Unix permission bits: `0o666` base → executable `|0o111` → private `&^0o77` →
-/// readonly `&^0o222`. No special bits.
+/// The Unix permission bits, computed from a base of `0o666`: the executable prefix ORs in the
+/// execute bits (`0o111`), the private prefix clears the group and other bits (`0o77`), and the
+/// readonly prefix clears the write bits (`0o222`). No special bits are set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMode(u32);
 
@@ -76,9 +77,11 @@ impl FileMode {
         FileMode(0o666)
     }
 
-    /// Applies mode prefixes to `base` (`0o666`). Prefix order in the file name is irrelevant;
-    /// application uses a fixed order (executable → private → readonly) because `|0o111` and
-    /// `&^0o77` do not commute, so order would change the result. Stackable.
+    /// Applies the mode prefixes to a base of `0o666`. The order the prefixes appear in the file
+    /// name does not matter, but the order they are applied in does, so it is fixed: executable,
+    /// then private, then readonly. That fixed order is necessary because setting the execute bits
+    /// and clearing the group and other bits do not commute — applying them the other way around
+    /// would give a different result. The prefixes stack.
     pub fn from_modes(modes: &[crate::domain::name::Mode]) -> Self {
         use crate::domain::name::Mode;
         let mut mode = FileMode::base();
@@ -122,7 +125,7 @@ pub struct PayloadEntry {
 pub struct DestStatus {
     /// The actual write location after resolving symlinks.
     pub final_path: PathBuf,
-    /// Whether per-component containment passed (false → external-write confirm).
+    /// Whether per-component containment passed. When it did not, the write needs external-write confirmation.
     pub inside_target: bool,
     /// Whether the dest already exists (including the symlink itself).
     pub exists: bool,
@@ -137,9 +140,9 @@ pub struct DestStatus {
 /// check, which a `..` in the path or a concurrent creation could answer wrongly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetPreparation {
-    /// This run created the final component → cleanup candidate on failure.
+    /// This run created the final component, so it is a candidate for cleanup on failure.
     Created,
-    /// The final component already existed → never cleaned up on failure (user data).
+    /// The final component already existed, so it is left alone on failure (it holds user data).
     Existing,
 }
 
@@ -222,7 +225,8 @@ mod tests {
     #[test]
     fn from_modes_all_three_stacked() {
         use crate::domain::name::Mode;
-        // exec(|0o111) → private(&^0o77) → readonly(&^0o222): 0o777→0o700→0o500 (keeps execute, drops write).
+        // Applying executable (OR in 0o111), then private (clear 0o77), then readonly (clear 0o222):
+        // 0o777 becomes 0o700 becomes 0o500, which keeps execute and drops write.
         let m = FileMode::from_modes(&[Mode::Readonly, Mode::Executable, Mode::Private]);
         assert_eq!(m.bits(), 0o500);
     }
@@ -231,17 +235,17 @@ mod tests {
     fn from_modes_two_way_combos() {
         use crate::domain::name::Mode;
         // Locks the full contract (the 2-way combos among the 8 pre-umask results).
-        // exec+readonly: 0o777 &^0o222 = 0o555.
+        // executable plus readonly: 0o777 with the write bits (0o222) cleared is 0o555.
         assert_eq!(
             FileMode::from_modes(&[Mode::Executable, Mode::Readonly]).bits(),
             0o555
         );
-        // private+readonly: 0o600 &^0o222 = 0o400.
+        // private plus readonly: 0o600 with the write bits (0o222) cleared is 0o400.
         assert_eq!(
             FileMode::from_modes(&[Mode::Private, Mode::Readonly]).bits(),
             0o400
         );
-        // exec+private: 0o777 &^0o77 = 0o700.
+        // executable plus private: 0o777 with the group and other bits (0o77) cleared is 0o700.
         assert_eq!(
             FileMode::from_modes(&[Mode::Executable, Mode::Private]).bits(),
             0o700

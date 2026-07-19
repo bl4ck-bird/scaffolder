@@ -1,7 +1,7 @@
-//! Static checks (`template validate`): schema, questions, `when`, file-name grammar, partial
-//! references, and `.jinja` syntax. Not fail-fast — a manifest load failure is captured as one
-//! finding, and independent payload-based checks (file name, syntax, source conflict, partial
-//! references) still run. Uses only domain ports.
+//! The static checks behind `template validate`: manifest schema, questions, `when` expressions,
+//! file-name grammar, partial references, and `.jinja` syntax. The checks are not fail-fast: if
+//! the manifest fails to load, that becomes a single finding and the checks that don't depend on
+//! it — file names, syntax, source conflicts, partial references — still run. Uses only domain ports.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -49,8 +49,9 @@ pub struct ValidatePorts<'a> {
     pub syntax: &'a dyn SyntaxChecker,
 }
 
-/// Runs the static template checks and returns every finding. `Err` is only for being unable
-/// to run a check at all (e.g. an IO failure); template defects all go into `ValidationReport.findings`.
+/// Runs the static checks over a template and returns every finding. An `Err` is reserved for
+/// the case where a check cannot be run at all, such as an IO failure; anything wrong with the
+/// template itself is reported as a finding in the `ValidationReport`, never as an error.
 pub fn validate_template(template_root: &Path, ports: ValidatePorts) -> Result<ValidationReport> {
     let mut findings = Vec::new();
 
@@ -216,10 +217,11 @@ fn check_template_source(
     }
 }
 
-/// Extracts only literal includes of the form `{% include "name" %}` / `{% include 'name' %}`
-/// (whitespace and `{%-`/`-%}` variants allowed). A dynamic include (variable, list, expression)
-/// is naturally skipped since the first token after `include` is not a quote (avoiding false
-/// positives — skip when unsure).
+/// Extracts only literal includes, those written as `{% include "name" %}` or
+/// `{% include 'name' %}` (with any surrounding whitespace and the `{%-`/`-%}` trimming variants).
+/// A dynamic include — one that names a variable, list, or expression — is skipped on its own,
+/// because the first token after `include` is then not a quote. The rule is deliberately
+/// conservative: when it can't be sure, it leaves the include alone rather than risk a false positive.
 fn literal_includes(source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut cursor = 0usize;

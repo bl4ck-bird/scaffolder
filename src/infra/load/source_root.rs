@@ -8,9 +8,10 @@ use anyhow::{Context, Result, bail};
 
 use crate::domain::store::SourceRootSource;
 
-/// Reads `<template_root>/.scaffoldroot` to resolve the effective source root. Its content is
-/// a template_root-relative subpath. Absent file → template_root unchanged. `..`, absolute
-/// paths, and external symlinks that escape template_root are errors.
+/// Reads `<template_root>/.scaffoldroot` to work out the effective source root. The file's
+/// contents are a subpath relative to `template_root`. If the file is absent, the source root is
+/// just `template_root` unchanged. A subpath containing `..`, an absolute path, or a symlink that
+/// escapes `template_root` is rejected as an error.
 pub struct FsSourceRootSource;
 
 impl SourceRootSource for FsSourceRootSource {
@@ -19,9 +20,10 @@ impl SourceRootSource for FsSourceRootSource {
         let content = match fs::read_to_string(&marker) {
             Ok(content) => content,
             Err(e) if e.kind() == ErrorKind::NotFound => {
-                // Distinguish "no file" from "existing (dangling) symlink whose target is
-                // missing" — both give NotFound from read_to_string. If the marker itself
-                // exists (including a symlink), fail loud.
+                // Tell two cases apart: the file genuinely not being there, versus a symlink that
+                // exists but points at a missing target (a dangling symlink). Both surface as
+                // NotFound from read_to_string. If the marker itself exists — even as a symlink —
+                // treat that as an error rather than silently falling back to template_root.
                 match marker.symlink_metadata() {
                     Err(meta_err) if meta_err.kind() == ErrorKind::NotFound => {
                         return Ok(template_root.to_path_buf());

@@ -42,9 +42,10 @@ impl PayloadStore for FsPayloadStore {
 
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>> {
         let path = source_root.join(entry.rel.as_path());
-        // A symlink may have been swapped to point outside between the walk and this read, so
-        // re-verify containment just before reading and read from the canonical path to avoid
-        // re-following symlinks (narrows the source-side gap).
+        // Between the moment the directory walk saw this entry and now, a symlink along the path
+        // could have been swapped to point outside the source root. So re-check containment right
+        // before reading, and read from the already-canonicalized path so the symlinks are not
+        // followed a second time. This narrows the window for such a swap on the source side.
         let canonical_root = source_root.canonicalize().with_context(|| {
             format!(
                 "payload source root {} does not exist",
@@ -65,10 +66,11 @@ impl PayloadStore for FsPayloadStore {
     }
 
     fn ensure_target(&self, target_root: &Path) -> Result<TargetPreparation> {
-        // Lexically normalize to settle the effective target, then prepare only its parent and
-        // create the final component exclusively. An exists()+create_dir_all approach misjudges
-        // `..` paths and create-races as new and could delete pre-existing user data (exclusive
-        // create_dir prevents that).
+        // Normalize the path textually to settle on the effective target, then prepare only its
+        // parent and create the final component exclusively. The obvious alternative — check
+        // `exists()` and then `create_dir_all` — would wrongly treat a `..` in the path, or a
+        // directory created by a concurrent run, as brand new, and could go on to delete data the
+        // user already had there. Creating the final component exclusively avoids that.
         let effective = normalize_target(target_root);
         if let Some(parent) = effective.parent() {
             fs::create_dir_all(parent).with_context(|| {
@@ -78,9 +80,10 @@ impl PayloadStore for FsPayloadStore {
         match fs::create_dir(&effective) {
             Ok(()) => Ok(TargetPreparation::Created),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                // What already exists must be a real directory (or a symlink to one) to be usable
-                // as the target. `metadata` follows symlinks, so a broken/non-directory symlink
-                // errors. Either way we did not create it, so it is not a cleanup candidate.
+                // Whatever is already there has to be a real directory — or a symlink to one — for
+                // us to use it as the target. `metadata` follows symlinks, so a broken symlink, or
+                // one pointing at a non-directory, produces an error here. In every case we did not
+                // create it, so it is not something we would clean up on failure.
                 let meta = fs::metadata(&effective).with_context(|| {
                     format!(
                         "target {} exists but could not be inspected",
@@ -172,7 +175,8 @@ const MAX_WALK_DEPTH: u32 = 64;
 /// - `create_new` (O_EXCL) does not follow symlinks and only creates a new file.
 /// - The mode is set at creation via `mode`, with the OS applying umask, so a private file appears
 ///   at its final location with correct permissions from the start — no wrong-permission window.
-/// - `rename` atomically replaces even an existing dest symlink (the link itself, not its target) → no out-of-target contamination.
+/// - `rename` atomically replaces even an existing dest that is a symlink, swapping the link
+///   itself rather than following it, so nothing is written outside the target.
 /// - No partial output: on failure the temp is cleaned up and dest keeps its prior state.
 #[cfg(unix)]
 fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) -> Result<()> {
@@ -219,8 +223,9 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) ->
             // Atomically replace the existing dest (if a symlink, replace the link itself).
             fs::rename(&temp_path, dest)
         } else {
-            // The dest must be newly created. `hard_link` fails with EEXIST if it already exists,
-            // so it won't silently clobber a file a race created after plan. Remove the temp link either way.
+            // The dest must be created fresh. `hard_link` fails with EEXIST if something is already
+            // there, so it will not silently clobber a file that a concurrent run created after the
+            // plan step. Either way, remove the temporary link afterwards.
             let result = fs::hard_link(&temp_path, dest);
             let _ = fs::remove_file(&temp_path);
             result
@@ -248,11 +253,12 @@ fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode, _overwrite: bool) 
     fs::write(dest, content).with_context(|| format!("failed to write {}", dest.display()))
 }
 
-/// Resolves the final write location. The final component is **not dereferenced** (atomic_write
-/// replaces it in place); only the parent (intermediate components) is symlink-resolved, then the
-/// final basename is appended. So even a final-component symlink pointing outside is judged inside
-/// the target and treated as an overwrite (in-place replace) — only intermediate-component symlinks
-/// count as external writes.
+/// Resolves the final write location. The last path component is deliberately not followed,
+/// because `atomic_write` replaces it in place; only the parent — the intermediate components —
+/// is symlink-resolved, and then the final basename is appended to that. As a result, even a
+/// symlink at the final component that points outside the target is still judged to be inside it
+/// and is treated as an overwrite (replaced in place). Only a symlink among the intermediate
+/// components counts as a write that escapes the target.
 fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(file_name)) => {
@@ -263,8 +269,9 @@ fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Canonicalizes (symlink-resolves) up to the nearest existing ancestor, then reattaches the
-/// non-existent tail components. For directory-path resolution only (intermediate-component symlinks are followed).
+/// Symlink-resolves the path up to its nearest existing ancestor, then reattaches the components
+/// that do not exist yet. Used only for resolving directory paths, where following symlinks in
+/// the intermediate components is intended.
 fn resolve_existing_ancestor(dir: &Path) -> Result<PathBuf> {
     let mut existing = dir.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
@@ -290,11 +297,11 @@ fn resolve_existing_ancestor(dir: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-/// Enumerates the payload. Symlinks pointing inside the target (= inside the source root) are
-/// dereferenced: directory symlinks recurse, file symlinks read the target's content
-/// (`read_content`'s `fs::read` follows). Symlinks pointing outside the source root are rejected as
-/// external content ingress (fail-loud). Cycles from directory symlinks are detected via canonical
-/// path tracking and error out.
+/// Enumerates the payload. A symlink that points inside the source root is followed: a directory
+/// symlink is recursed into, and a file symlink has its target's content read (the `fs::read` in
+/// `read_content` follows it). A symlink that points outside the source root is rejected as an
+/// error, since it would pull outside content into the payload. Cycles introduced by directory
+/// symlinks are caught by tracking canonical paths, and error out rather than looping forever.
 fn walk(
     source_root: &Path,
     dir: &Path,

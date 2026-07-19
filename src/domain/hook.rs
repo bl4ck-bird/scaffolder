@@ -77,8 +77,9 @@ pub trait HookRunner {
 
 /// Converts the answer map into hook env vars, keyed `SCAFFOLDER_<UPPER(name)>`.
 ///
-/// `List` (multiselect) is space-joined — deliberately not `answer::canonical_string`
-/// (comma-joined for choice matching), a different format for a different purpose.
+/// A `List` value (from a multiselect) is joined with spaces. This is deliberately different
+/// from `answer::canonical_string`, which joins with commas for choice matching; the two serve
+/// different purposes and should not share a format.
 pub fn hook_env(answers: &BTreeMap<String, AnswerValue>) -> BTreeMap<String, String> {
     answers
         .iter()
