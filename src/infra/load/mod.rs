@@ -1,4 +1,4 @@
-//! 템플릿·스토어 로딩 어댑터.
+//! Template and store loading adapters.
 
 pub mod answers;
 pub mod data;
@@ -14,8 +14,8 @@ use anyhow::{Result, bail};
 use crate::domain::answer::AnswerValue;
 use crate::domain::data::DataValue;
 
-/// TOML 값을 `AnswerValue`로 변환한다. manifest의 `default`/`choices`와 answers-file의
-/// `name = value` 양쪽에서 쓰는 공유 변환 로직.
+/// Converts a TOML value into an `AnswerValue`. Shared by the manifest `default`/`choices`
+/// and the answers-file `name = value`.
 pub(crate) fn toml_to_answer_value(value: &toml::Value) -> Result<AnswerValue> {
     match value {
         toml::Value::String(s) => Ok(AnswerValue::Text(s.clone())),
@@ -36,8 +36,9 @@ pub(crate) fn toml_to_answer_value(value: &toml::Value) -> Result<AnswerValue> {
     }
 }
 
-/// TOML 값을 `DataValue`로 변환한다. `[data]`(manifest)와 `data/*.toml`(DataSource) 양쪽이 쓴다.
-/// 정적 데이터라 answer와 달리 모든 타입을 수용한다; datetime은 문자열로 강등한다.
+/// Converts a TOML value into a `DataValue`. Used by both `[data]` (manifest) and `data/*.toml`
+/// (`DataSource`). Being static data, it accepts every type (unlike answers); datetimes are
+/// demoted to strings.
 pub(crate) fn toml_to_data_value(value: &toml::Value) -> DataValue {
     match value {
         toml::Value::String(s) => DataValue::Str(s.clone()),

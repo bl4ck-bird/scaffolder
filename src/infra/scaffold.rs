@@ -1,1 +1,1 @@
-//! `template new`(심플/full) 생성.
+//! `template new` (simple / full) creation.

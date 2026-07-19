@@ -1,4 +1,4 @@
-//! `data/` 로드·병합 — `DataSource`.
+//! `data/` loading and merging — `DataSource`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,11 +9,11 @@ use crate::domain::data::{DataSource, DataValue, merge};
 use crate::infra::load::toml_to_data_value;
 use crate::infra::load::trust::ensure_within_root;
 
-/// `<template_root>/data/*.toml`을 파일명 lexical 순서로 `base`(매니페스트 `[data]`) 위에
-/// 단일 left-fold한다. `data/`가 없으면 `base` 그대로. 읽기/메타데이터 오류는 조용히 넘기지
-/// 않고 전파한다(불완전한 정적 데이터로 진행 방지). `data/` 디렉토리 자체가 외부 심링크면
-/// `trust` 없이 거부한다(`read_dir`가 dir 심링크를 follow). 디렉토리 안 leaf 심링크는
-/// `file_type()`(no-follow)로 여전히 skip — 외부 읽기 표면이 아니다.
+/// Single left-folds `<template_root>/data/*.toml` (lexical order by name) onto `base` (the
+/// manifest `[data]`). Absent `data/` → `base` unchanged. Read/metadata errors propagate rather
+/// than being swallowed (no proceeding on incomplete static data). An external-symlink `data/`
+/// directory is rejected without `trust` (`read_dir` follows a dir symlink); leaf symlinks inside
+/// are still skipped via `file_type()` (no-follow) — not an external read surface.
 pub struct FsDataSource {
     pub root_canon: PathBuf,
     pub trust: bool,
@@ -102,8 +102,8 @@ mod tests {
 
     #[test]
     fn single_fold_does_not_resurrect_replaced_values() {
-        // base(manifest) settings.a=1 → a.toml settings="reset"(table→scalar) → b.toml settings.b=2.
-        // 정본 순서는 {settings:{b:2}}. 파일끼리 먼저 병합 후 base에 합치면 a가 부활해 오답이 된다.
+        // base(manifest) settings.a=1 → a.toml settings="reset" (table→scalar) → b.toml settings.b=2.
+        // Canonical order gives {settings:{b:2}}. Merging files together before base would resurrect a (wrong).
         let dir = TempDir::new().unwrap();
         let data = dir.path().join("data");
         fs::create_dir_all(&data).unwrap();

@@ -1,4 +1,4 @@
-//! `when` 조건식 평가(strict undefined) — `ConditionEvaluator`.
+//! `when` expression evaluation (strict undefined) — `ConditionEvaluator`.
 
 use anyhow::{Context as _, Result, bail};
 use minijinja::Environment;
@@ -7,8 +7,7 @@ use minijinja::value::Value as JinjaValue;
 use crate::domain::answer::{AnswerContext, ConditionEvaluator};
 use crate::infra::render::render::{RenderContext, base_environment};
 
-/// MiniJinja 기반 `ConditionEvaluator`. render.rs와 동일한 strict undefined + `env()` 설정을
-/// 공유한다.
+/// MiniJinja-based `ConditionEvaluator`. Shares the same strict-undefined + `env()` setup as render.rs.
 pub struct MiniJinjaConditionEvaluator {
     env: Environment<'static>,
 }

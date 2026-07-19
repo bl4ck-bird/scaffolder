@@ -1,4 +1,4 @@
-//! 스토어 조회·생성(XDG·`--template-dir` 우선순위) — `TemplateStore`, `TemplateInitializer`.
+//! Store lookup and creation (XDG / `--template-dir` priority) — `TemplateStore`, `TemplateInitializer`.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -8,8 +8,8 @@ use anyhow::{Result, bail};
 use crate::domain::skeleton::SkeletonEntry;
 use crate::domain::store::{TemplateCatalog, TemplateInitializer, TemplateListing, TemplateStore};
 
-/// `--template-dir` > `$SCAFFOLDER_HOME` > `$XDG_CONFIG_HOME/scaffolder` > `~/.scaffolder`
-/// 순으로 스토어를 조회하는 `TemplateStore`.
+/// `TemplateStore` searching in the order `--template-dir` > `$SCAFFOLDER_HOME` >
+/// `$XDG_CONFIG_HOME/scaffolder` > `~/.scaffolder`.
 pub struct FsTemplateStore {
     template_dir: Option<PathBuf>,
 }
@@ -37,13 +37,13 @@ impl FsTemplateStore {
 
 impl TemplateStore for FsTemplateStore {
     fn resolve(&self, name_or_path: &str) -> Result<PathBuf> {
-        // "."/".."는 디렉토리로 존재해도 항상 거부한다 — CWD/상위를 암묵적 템플릿으로 못 쓰게
-        // 막는 가드를 path-like 분기보다 앞세워 유지한다(base 밖 참조 방지).
+        // Always reject "."/".." even if they exist as directories — keep this guard ahead of the
+        // path-like branch so CWD/parent can't be used as an implicit template (prevents out-of-base refs).
         if name_or_path == "." || name_or_path == ".." {
             bail!("template name {name_or_path:?} must be a single path component");
         }
 
-        // 구분자 포함 = 명시적 경로 지정으로 간주해 스토어 체인 없이 로컬로 즉시 판정한다.
+        // A separator means an explicit path: resolve it locally at once, without the store chain.
         if name_or_path.contains('/') {
             let as_path = Path::new(name_or_path);
             return if as_path.is_dir() {
@@ -53,8 +53,9 @@ impl TemplateStore for FsTemplateStore {
             };
         }
 
-        // bare 단일 컴포넌트 = 스토어명 후보 — 우선순위 체인을 먼저 순회해 --template-dir 등이
-        // CWD의 동명 디렉토리에 조용히 밀리지 않게 한다(로컬은 스토어 미스 시에만 fallback).
+        // A bare single component is a store-name candidate — walk the priority chain first so
+        // --template-dir etc. aren't silently shadowed by a same-named CWD directory (local is a
+        // fallback only on a store miss).
         let name = validate_store_name(name_or_path)?;
 
         let bases = self.store_bases();
@@ -122,8 +123,8 @@ impl TemplateInitializer for FsTemplateStore {
         std::fs::create_dir_all(base)?;
 
         let template_root = base.join(name);
-        // exists 가드는 어떤 entry도 쓰기 전에 검사한다 — 재실행 시 기존 디렉토리를
-        // 부작용 없이 abort하기 위함(디렉토리든 파일이든 이미 있으면 거부).
+        // The exists guard runs before writing any entry — to abort with no side effects on a
+        // re-run against an existing name (reject whether it's a directory or a file).
         if template_root.symlink_metadata().is_ok() {
             bail!(
                 "template {name:?} already exists at {}",
@@ -148,7 +149,7 @@ impl TemplateInitializer for FsTemplateStore {
     }
 }
 
-/// 스토어명 후보는 빈 문자열이 아니어야 한다(구분자·`.`/`..`는 resolve에서 이미 배제됨).
+/// A store-name candidate must be non-empty (separators and `.`/`..` are already excluded by resolve).
 fn validate_store_name(name_or_path: &str) -> Result<&str> {
     if name_or_path.is_empty() {
         bail!("template name {name_or_path:?} must be a single path component");

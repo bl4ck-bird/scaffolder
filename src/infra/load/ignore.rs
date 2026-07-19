@@ -1,4 +1,4 @@
-//! `.scaffoldignore` 로드(+ `.jinja` 렌더) — `IgnoreSource`.
+//! `.scaffoldignore` loading (+ `.jinja` rendering) — `IgnoreSource`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,8 +14,8 @@ use crate::infra::load::trust::ensure_within_root;
 const STATIC_NAME: &str = ".scaffoldignore";
 const JINJA_NAME: &str = ".scaffoldignore.jinja";
 
-/// gitignore 시맨틱으로 정적/렌더된 `.scaffoldignore`를 로드하는 `IgnoreSource`. 외부
-/// 심링크는 `trust` 없이 거부한다.
+/// `IgnoreSource` loading a static or rendered `.scaffoldignore` with gitignore semantics.
+/// External symlinks are rejected without `trust`.
 pub struct FsIgnoreSource<'a> {
     renderer: &'a dyn Renderer,
     root_canon: PathBuf,
@@ -32,9 +32,9 @@ impl<'a> FsIgnoreSource<'a> {
     }
 }
 
-/// `path`가 읽을 수 있는 파일이면 `Ok(true)`, 아예 없으면 `Ok(false)`. 경로가 존재하는데(심링크
-/// 포함) 파일이 아니면(broken 심링크 등) fail-loud — 조용히 "부재"로 취급해 무시 필터가 사라지는
-/// 것을 막는다.
+/// `Ok(true)` if `path` is a readable file, `Ok(false)` if absent. If the path exists (including
+/// a symlink) but is not a file (e.g. a broken symlink), fail loud — do not silently treat it as
+/// "absent" and lose the ignore filter.
 fn ignore_file_present(path: &Path) -> Result<bool> {
     if path.is_file() {
         return Ok(true);

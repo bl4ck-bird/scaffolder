@@ -1,4 +1,4 @@
-//! `FsTemplateStore` 동작 테스트 (store.rs에서 분리).
+//! `FsTemplateStore` behavior tests (split out from store.rs).
 
 use super::*;
 use std::sync::Mutex;
@@ -7,8 +7,8 @@ use tempfile::tempdir;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-/// `SCAFFOLDER_HOME`/`XDG_CONFIG_HOME`는 프로세스 전역이라 동시 테스트 실행 시 서로
-/// 오염시킨다 — 뮤텍스로 직렬화하고 이전 값을 저장·복원한다.
+/// `SCAFFOLDER_HOME`/`XDG_CONFIG_HOME` are process-global and would cross-contaminate under
+/// concurrent test runs — serialize with a mutex and save/restore the previous values.
 fn with_env_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let previous: Vec<(&str, Option<String>)> =
@@ -197,8 +197,8 @@ fn empty_scaffolder_home_is_skipped_in_favor_of_next_tier() {
 #[test]
 fn missing_template_reports_searched_locations() {
     let template_dir = tempdir().expect("tempdir");
-    // dirs::home_dir()는 $HOME을 읽으므로, 실제 개발자 홈에 우연히 같은 이름의 스토어
-    // 엔트리가 있어도 이 테스트가 오염되지 않게 가짜 홈으로 격리한다.
+    // dirs::home_dir() reads $HOME, so isolate with a fake home to keep this test uncontaminated
+    // even if the real developer home happens to have a same-named store entry.
     let fake_home = tempdir().expect("tempdir");
     let store = FsTemplateStore::new(Some(template_dir.path().to_path_buf()));
 
@@ -245,7 +245,7 @@ fn falls_through_to_scaffolder_home_when_name_absent_from_template_dir() {
 
 #[test]
 fn path_like_missing_local_directory_gives_local_path_error_not_store_name_error() {
-    // TempDir이 스코프를 벗어나며 자체 정리되므로, 그 경로는 확실히 존재하지 않는다.
+    // The TempDir self-cleans as it leaves scope, so that path definitely does not exist.
     let vanished = tempdir().expect("tempdir").path().join("gone");
     let vanished_str = vanished.to_str().expect("utf8 path").to_string();
     let store = FsTemplateStore::new(None);
@@ -430,7 +430,7 @@ fn create_errors_and_has_no_side_effects_when_name_already_exists() {
         .expect_err("create should error when name already exists");
 
     assert!(err.to_string().contains("demo"));
-    // exists 가드는 쓰기 전에 검사돼야 한다 — 기존 빈 디렉토리에 파일이 새로 생기지 않아야 한다.
+    // The exists guard must check before writing — no new file should appear in the existing empty directory.
     let remaining: Vec<_> = std::fs::read_dir(&existing)
         .expect("read existing dir")
         .collect();

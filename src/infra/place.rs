@@ -1,4 +1,4 @@
-//! 파일 쓰기(mode·umask·심링크 방어·containment) — `PayloadStore`.
+//! File writes (mode, umask, symlink defense, containment) — `PayloadStore`.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -14,7 +14,7 @@ use crate::domain::place::{
     safe_rel_path,
 };
 
-/// 파일시스템 기반 `PayloadStore`: payload 읽기 + target에 containment·심링크 방어 하에 쓰기.
+/// Filesystem `PayloadStore`: reads payload and writes to the target under containment and symlink defense.
 pub struct FsPayloadStore;
 
 impl PayloadStore for FsPayloadStore {
@@ -42,8 +42,9 @@ impl PayloadStore for FsPayloadStore {
 
     fn read_content(&self, source_root: &Path, entry: &PayloadEntry) -> Result<Vec<u8>> {
         let path = source_root.join(entry.rel.as_path());
-        // 열거(walk)와 읽기 사이에 심링크가 외부로 교체됐을 수 있으므로 읽기 직전 containment를
-        // 재검증하고, 심링크를 재추종하지 않도록 canonical 경로에서 읽는다(source-side 갭 축소).
+        // A symlink may have been swapped to point outside between the walk and this read, so
+        // re-verify containment just before reading and read from the canonical path to avoid
+        // re-following symlinks (narrows the source-side gap).
         let canonical_root = source_root.canonicalize().with_context(|| {
             format!(
                 "payload source root {} does not exist",
@@ -64,9 +65,10 @@ impl PayloadStore for FsPayloadStore {
     }
 
     fn ensure_target(&self, target_root: &Path) -> Result<TargetPreparation> {
-        // 경로를 lexical 정규화해 실효 target을 확정한 뒤, 그 부모만 준비하고 최종 컴포넌트를
-        // 배타적으로 생성한다. `exists()` 후 `create_dir_all` 방식은 `..` 경로와 create-race를
-        // 신규로 오판정해 사전 존재 사용자 데이터를 삭제할 수 있다(배타적 create_dir로 원천 차단).
+        // Lexically normalize to settle the effective target, then prepare only its parent and
+        // create the final component exclusively. An exists()+create_dir_all approach misjudges
+        // `..` paths and create-races as new and could delete pre-existing user data (exclusive
+        // create_dir prevents that).
         let effective = normalize_target(target_root);
         if let Some(parent) = effective.parent() {
             fs::create_dir_all(parent).with_context(|| {
@@ -76,9 +78,9 @@ impl PayloadStore for FsPayloadStore {
         match fs::create_dir(&effective) {
             Ok(()) => Ok(TargetPreparation::Created),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-                // 이미 있는 것이 실제 디렉토리(또는 디렉토리를 가리키는 symlink)여야 target으로 쓸 수
-                // 있다. `metadata`는 symlink를 follow하므로 broken/비-디렉토리 symlink는 오류가 된다.
-                // 어느 경우든 우리가 만들지 않았으므로 정리 대상이 아니다.
+                // What already exists must be a real directory (or a symlink to one) to be usable
+                // as the target. `metadata` follows symlinks, so a broken/non-directory symlink
+                // errors. Either way we did not create it, so it is not a cleanup candidate.
                 let meta = fs::metadata(&effective).with_context(|| {
                     format!(
                         "target {} exists but could not be inspected",
@@ -101,8 +103,8 @@ impl PayloadStore for FsPayloadStore {
     }
 
     fn cleanup_target(&self, target_root: &Path) -> Result<()> {
-        // ensure_target과 동일하게 정규화한 실효 경로만 삭제한다 — 렌더 경로가 아니라 준비된 그
-        // target root에만 호출된다(호출부 pipeline이 Created일 때만 부른다).
+        // Delete only the effective path, normalized the same as ensure_target — called on the
+        // prepared target root, not a rendered path (the pipeline caller only invokes it when Created).
         let effective = normalize_target(target_root);
         fs::remove_dir_all(&effective).with_context(|| {
             format!(
@@ -158,20 +160,20 @@ impl PayloadStore for FsPayloadStore {
     }
 }
 
-/// temp 파일 고유 접미사용 프로세스-로컬 카운터.
+/// Process-local counter for the unique temp-file suffix.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_TEMP_ATTEMPTS: u32 = 32;
-/// payload 트리 재귀 depth 상한(심링크 alias·병적 깊이 backstop). 실제 템플릿은 훨씬 얕다.
+/// Recursion depth cap for the payload tree (a backstop against symlink aliases / pathological depth). Real templates are much shallower.
 const MAX_WALK_DEPTH: u32 = 64;
 
-/// 같은 부모 디렉토리에 temp를 만들어 내용을 쓰고 `rename`으로 dest에 원자 교체한다.
+/// Writes content to a temp file in the same parent directory, then atomically replaces dest via `rename`.
 ///
-/// - temp는 dest와 동일 디렉토리(=동일 파일시스템)라 `rename`이 원자적이다.
-/// - `create_new`(O_EXCL)는 심링크를 따라가지 않고 새 파일만 만든다.
-/// - 모드는 생성 시 `mode`로 지정해 OS가 umask를 적용한다. private 파일이 최종 위치에
-///   처음부터 올바른 권한으로 나타나므로 잘못된 권한 노출 창이 없다.
-/// - `rename`은 dest가 기존 심링크여도 심링크 자체를 원자 교체한다(대상 미추종) → target 밖 오염 없음.
-/// - 부분출력 없음: 실패 시 temp를 정리하고 dest는 이전 상태를 유지한다.
+/// - The temp is in dest's directory (same filesystem), so `rename` is atomic.
+/// - `create_new` (O_EXCL) does not follow symlinks and only creates a new file.
+/// - The mode is set at creation via `mode`, with the OS applying umask, so a private file appears
+///   at its final location with correct permissions from the start — no wrong-permission window.
+/// - `rename` atomically replaces even an existing dest symlink (the link itself, not its target) → no out-of-target contamination.
+/// - No partial output: on failure the temp is cleaned up and dest keeps its prior state.
 #[cfg(unix)]
 fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -214,17 +216,17 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) ->
         drop(file);
 
         let placed = if overwrite {
-            // 기존 dest를 원자 교체(심링크면 링크 자체를 대체).
+            // Atomically replace the existing dest (if a symlink, replace the link itself).
             fs::rename(&temp_path, dest)
         } else {
-            // dest가 새로 생겨야 한다. `hard_link`는 dest가 이미 있으면 EEXIST로 실패하므로, plan
-            // 이후 경쟁으로 생긴 파일을 조용히 덮지 않는다. 성공·실패 무관하게 temp 링크를 제거한다.
+            // The dest must be newly created. `hard_link` fails with EEXIST if it already exists,
+            // so it won't silently clobber a file a race created after plan. Remove the temp link either way.
             let result = fs::hard_link(&temp_path, dest);
             let _ = fs::remove_file(&temp_path);
             result
         };
         if let Err(e) = placed {
-            // overwrite(rename) 실패 시 temp가 남으므로 정리한다. non-overwrite는 위에서 이미 제거됨.
+            // On overwrite(rename) failure the temp remains, so clean it up. Non-overwrite is already removed above.
             if overwrite {
                 let _ = fs::remove_file(&temp_path);
             }
@@ -242,14 +244,15 @@ fn atomic_write(dest: &Path, content: &[u8], mode: FileMode, overwrite: bool) ->
 
 #[cfg(not(unix))]
 fn atomic_write(dest: &Path, content: &[u8], _mode: FileMode, _overwrite: bool) -> Result<()> {
-    // 비-Unix는 BLUEPRINT non-goal. best-effort(모드/원자성 보장 없음).
+    // Non-Unix is a BLUEPRINT non-goal. Best-effort (no mode/atomicity guarantee).
     fs::write(dest, content).with_context(|| format!("failed to write {}", dest.display()))
 }
 
-/// 최종 기록 위치를 해석한다. 최종 컴포넌트는 `atomic_write`가 제자리에서 원자 교체하므로
-/// **dereference하지 않고**, 부모(중간 컴포넌트)만 심링크를 따라 해석한 뒤 최종 basename을 그대로
-/// 붙인다. 이렇게 하면 최종 컴포넌트가 외부를 가리키는 기존 심링크여도 containment는 target 안으로
-/// 판정되어 overwrite(제자리 교체)로 처리된다 — 중간 컴포넌트 심링크만 외부쓰기 대상이다.
+/// Resolves the final write location. The final component is **not dereferenced** (atomic_write
+/// replaces it in place); only the parent (intermediate components) is symlink-resolved, then the
+/// final basename is appended. So even a final-component symlink pointing outside is judged inside
+/// the target and treated as an overwrite (in-place replace) — only intermediate-component symlinks
+/// count as external writes.
 fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(file_name)) => {
@@ -260,8 +263,8 @@ fn resolve_final_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
-/// 존재하는 최상위 조상까지 canonicalize(심링크 해석)한 뒤 비존재 tail 컴포넌트를 재결합한다.
-/// 디렉토리 경로 해석에만 쓴다(중간 컴포넌트 심링크는 따라간다).
+/// Canonicalizes (symlink-resolves) up to the nearest existing ancestor, then reattaches the
+/// non-existent tail components. For directory-path resolution only (intermediate-component symlinks are followed).
 fn resolve_existing_ancestor(dir: &Path) -> Result<PathBuf> {
     let mut existing = dir.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
@@ -287,10 +290,11 @@ fn resolve_existing_ancestor(dir: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
-/// payload를 열거한다. target 안(=source root 안)을 가리키는 심링크는 dereference한다:
-/// 디렉토리 심링크는 재귀, 파일 심링크는 target 내용을 읽는다(`read_content`의 `fs::read`가 추종).
-/// source root 밖을 가리키는 심링크는 외부 내용 유입이므로 거부한다(fail-loud). 디렉토리 심링크로
-/// 생기는 cycle은 canonical 경로 추적으로 탐지해 에러낸다.
+/// Enumerates the payload. Symlinks pointing inside the target (= inside the source root) are
+/// dereferenced: directory symlinks recurse, file symlinks read the target's content
+/// (`read_content`'s `fs::read` follows). Symlinks pointing outside the source root are rejected as
+/// external content ingress (fail-loud). Cycles from directory symlinks are detected via canonical
+/// path tracking and error out.
 fn walk(
     source_root: &Path,
     dir: &Path,
@@ -299,7 +303,7 @@ fn walk(
     out: &mut Vec<PayloadEntry>,
     depth: u32,
 ) -> Result<()> {
-    // 병적으로 깊은(또는 심링크 alias로 부풀려진) 트리에 대한 backstop.
+    // Backstop against a pathologically deep (or symlink-alias-inflated) tree.
     if depth > MAX_WALK_DEPTH {
         bail!(
             "payload tree exceeds max depth {MAX_WALK_DEPTH} at {}",
@@ -316,8 +320,8 @@ fn walk(
             .file_type()
             .with_context(|| format!("failed to stat {}", path.display()))?;
 
-        // 파일명은 렌더·출력 경로에 UTF-8로 쓰이므로 비-UTF8 경로는 lossy 변환(다른 이름과 충돌)
-        // 대신 거부한다(fail-loud).
+        // File names are used as UTF-8 in render/output paths, so a non-UTF8 path is rejected
+        // (fail-loud) rather than lossily converted (which could collide with another name).
         let rel_str = path
             .strip_prefix(source_root)
             .with_context(|| format!("failed to compute relative path for {}", path.display()))?
@@ -327,7 +331,7 @@ fn walk(
         let rel = safe_rel_path(&rel_str)?;
 
         if file_type.is_symlink() {
-            // 심링크는 최종 위치를 canonical로 해석해 source root 안인지 판정한다.
+            // Resolve a symlink's final location canonically to decide if it is inside the source root.
             let canonical_target = path
                 .canonicalize()
                 .with_context(|| format!("failed to resolve payload symlink {}", path.display()))?;
@@ -393,8 +397,8 @@ mod tests {
 
     #[test]
     fn ensure_target_normalizes_dots_and_does_not_create_sibling() {
-        // base/missing/../preexisting에서 preexisting만 존재 → 실효 target=base/preexisting=Existing,
-        // sibling base/missing은 생성되지 않아야 한다.
+        // In base/missing/../preexisting only preexisting exists → effective target=base/preexisting=Existing;
+        // the sibling base/missing must not be created.
         let base = tempfile::tempdir().expect("tempdir");
         fs::create_dir(base.path().join("preexisting")).expect("mkdir preexisting");
         let target = base.path().join("missing").join("..").join("preexisting");
@@ -423,8 +427,8 @@ mod tests {
 
     #[test]
     fn ensure_target_errors_on_file_symlink_and_keeps_it() {
-        // 최종 컴포넌트가 파일을 가리키는 symlink → create_dir AlreadyExists, metadata(follow)가
-        // 파일이라 오류. symlink와 대상 파일 모두 보존(우리가 만들지 않음).
+        // Final component is a symlink to a file → create_dir AlreadyExists, metadata(follow) is a
+        // file → error. Both the symlink and its target file are preserved (we did not create them).
         let base = tempfile::tempdir().expect("tempdir");
         let real = base.path().join("real_file");
         fs::write(&real, b"data").expect("write real file");
@@ -441,7 +445,7 @@ mod tests {
 
     #[test]
     fn ensure_target_errors_on_broken_symlink_and_keeps_it() {
-        // broken symlink → create_dir AlreadyExists, metadata(follow)가 ENOENT → 오류. 보존.
+        // broken symlink → create_dir AlreadyExists, metadata(follow) is ENOENT → error. Preserved.
         let base = tempfile::tempdir().expect("tempdir");
         let target = base.path().join("broken");
         symlink(base.path().join("nonexistent"), &target).expect("broken symlink");
@@ -455,8 +459,8 @@ mod tests {
 
     #[test]
     fn ensure_target_reports_existing_for_directory_symlink_and_preserves_contents() {
-        // 디렉토리를 가리키는 symlink → AlreadyExists, metadata(follow) is_dir → Existing.
-        // 정리 대상이 아니므로 symlink 대상 디렉토리의 내용은 보존된다.
+        // Symlink to a directory → AlreadyExists, metadata(follow) is_dir → Existing.
+        // Not a cleanup candidate, so the symlink target directory's contents are preserved.
         let base = tempfile::tempdir().expect("tempdir");
         let real = base.path().join("real_dir");
         fs::create_dir(&real).expect("mkdir real dir");
@@ -485,7 +489,7 @@ mod tests {
 
     #[test]
     fn cleanup_target_leaves_parent_and_sibling_untouched() {
-        // 정리는 exact prepared root에만 국한 — parent 파일과 sibling 디렉토리의 sentinel은 불변.
+        // Cleanup is confined to the exact prepared root — the parent file and sibling directory sentinel are untouched.
         let base = tempfile::tempdir().expect("tempdir");
         let target = base.path().join("proj");
         fs::create_dir(&target).expect("mkdir target");
@@ -510,8 +514,8 @@ mod tests {
 
     #[test]
     fn cleanup_target_does_not_follow_symlink_to_external_dir() {
-        // target 안에 외부 디렉토리를 가리키는 symlink가 있어도, remove_dir_all은 symlink를 따라가지
-        // 않고 unlink만 하므로 외부 대상은 보존된다.
+        // Even with a symlink to an external directory inside the target, remove_dir_all does not
+        // follow it (only unlinks), so the external target is preserved.
         let base = tempfile::tempdir().expect("tempdir");
         let external = base.path().join("external");
         fs::create_dir(&external).expect("mkdir external");
@@ -567,7 +571,7 @@ mod tests {
             .expect("list_entries");
         let rels: Vec<String> = entries.iter().map(|e| e.rel.to_string()).collect();
 
-        // 심링크 디렉토리가 dereference되어 하위가 열거된다.
+        // The symlink directory is dereferenced and its contents are enumerated.
         assert!(rels.contains(&"link".to_string()));
         assert!(rels.contains(&"link/x.txt".to_string()));
         let link_entry = entries
@@ -614,7 +618,7 @@ mod tests {
 
     #[test]
     fn list_entries_allows_noncyclic_diamond_symlinks() {
-        // 두 심링크가 같은 real dir을 가리키지만 순환은 아니다 — cycle로 오탐하면 안 된다.
+        // Two symlinks point to the same real dir but it is not a cycle — must not be misflagged as one.
         let source = tempfile::tempdir().expect("tempdir");
         fs::create_dir(source.path().join("real")).expect("mkdir real");
         fs::write(source.path().join("real/x.txt"), b"x").expect("write x");
@@ -645,7 +649,7 @@ mod tests {
     fn list_entries_detects_directory_symlink_cycle() {
         let source = tempfile::tempdir().expect("tempdir");
         fs::create_dir(source.path().join("sub")).expect("mkdir sub");
-        // sub/loop → source root(조상)을 가리켜 cycle을 만든다.
+        // sub/loop → points at the source root (an ancestor), forming a cycle.
         symlink(source.path(), source.path().join("sub/loop")).expect("symlink cycle");
 
         let result = FsPayloadStore.list_entries(source.path());
@@ -687,7 +691,7 @@ mod tests {
         let rel = safe_rel_path("file.txt").unwrap();
         fs::write(target.path().join("file.txt"), b"pre-existing").expect("seed");
 
-        // overwrite=false인데 dest가 이미 있으면(plan 이후 경쟁 생성 등) 조용히 덮지 않고 실패한다.
+        // With overwrite=false and dest already present (e.g. a race after plan), fail rather than silently clobber.
         let result =
             FsPayloadStore.write_file(target.path(), &rel, b"new", FileMode::base(), false);
         assert!(
@@ -695,12 +699,12 @@ mod tests {
             "no-clobber create must fail when dest exists"
         );
 
-        // 기존 내용 보존.
+        // Existing content is preserved.
         assert_eq!(
             fs::read(target.path().join("file.txt")).unwrap(),
             b"pre-existing"
         );
-        // temp 파일 잔여 없음.
+        // No temp file remains.
         let leftover = fs::read_dir(target.path())
             .unwrap()
             .filter_map(|e| e.ok())
@@ -740,11 +744,11 @@ mod tests {
             .write_file(target.path(), &rel, b"new payload", FileMode::base(), true)
             .expect("write_file");
 
-        // 심링크 대상(target 밖)은 오염되지 않아야 한다.
+        // The symlink target (outside target) must not be contaminated.
         let external_content = fs::read(&external_file).expect("read external file");
         assert_eq!(external_content, b"untouched");
 
-        // dest 위치는 이제 일반 파일로 교체되어 있어야 한다.
+        // The dest location must now be replaced by a regular file.
         let dest_meta = fs::symlink_metadata(&link_path).expect("stat dest");
         assert!(!dest_meta.file_type().is_symlink());
         let dest_content = fs::read(&link_path).expect("read dest");
@@ -800,8 +804,8 @@ mod tests {
 
         assert!(status.exists);
         assert!(status.is_symlink);
-        // 최종 컴포넌트 심링크는 제자리 교체되므로 target 안(overwrite)으로 판정된다 — 외부를
-        // 가리켜도 rename은 링크 자체를 대체하고 대상을 건드리지 않는다.
+        // A final-component symlink is replaced in place, so it is judged inside the target
+        // (overwrite) — even pointing outside, rename replaces the link itself, not its target.
         assert!(status.inside_target);
         assert_eq!(
             status.final_path,

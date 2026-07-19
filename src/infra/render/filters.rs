@@ -1,4 +1,4 @@
-//! 커스텀 필터: heck case + slug + `dedup_lines`.
+//! Custom filters: heck case conversions, `slug`, and `dedup_lines`.
 
 use std::collections::HashSet;
 
@@ -7,8 +7,8 @@ use heck::{
 };
 use minijinja::Environment;
 
-/// case 필터와 `slug`·`dedup_lines`를 `Environment`에 등록한다. 렌더와 `when` 표현식 평가가
-/// 공유하는 `base_environment`에서 호출한다.
+/// Registers the case filters plus `slug` and `dedup_lines` on the `Environment`. Called from
+/// `base_environment`, shared by rendering and `when` expression evaluation.
 pub(crate) fn register(env: &mut Environment<'static>) {
     env.add_filter("snake_case", |s: String| s.to_snake_case());
     env.add_filter("kebab_case", |s: String| s.to_kebab_case());
@@ -20,7 +20,8 @@ pub(crate) fn register(env: &mut Environment<'static>) {
     env.add_filter("dedup_lines", |s: String| dedup_lines(&s));
 }
 
-/// 영숫자 run을 유지(소문자화)하고 그 사이 비영숫자 run을 단일 `-`로 접는다. 양끝 `-`는 제거한다.
+/// Keeps alphanumeric runs (lowercased) and folds non-alphanumeric runs between them into a
+/// single `-`; trims leading/trailing `-`.
 fn slug(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut pending_sep = false;
@@ -38,14 +39,14 @@ fn slug(input: &str) -> String {
     out
 }
 
-/// 비어 있지 않은 라인의 첫 등장만 남긴다(전역 dedup, 순서 보존). 빈 라인은 구조적 구분자이므로
-/// 보존한다. trailing newline은 round-trip한다.
+/// Keeps the first occurrence of each non-empty line (global dedup, order preserved). Blank
+/// lines are structural separators and are kept. A trailing newline round-trips.
 fn dedup_lines(input: &str) -> String {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut kept: Vec<&str> = Vec::new();
     for line in input.split('\n') {
-        // CRLF payload는 라인 끝에 `\r`을 남긴다. dedup 키에서 `\r`을 제외해 LF/CRLF 혼재
-        // (예: LF payload + CRLF partial)에서도 같은 라인으로 취급한다. 출력은 원본을 보존한다.
+        // A CRLF payload leaves a trailing `\r`. Strip it from the dedup key so mixed LF/CRLF
+        // (e.g. LF payload + CRLF partial) counts as the same line; the output keeps the original.
         let key = line.strip_suffix('\r').unwrap_or(line);
         if key.is_empty() || seen.insert(key) {
             kept.push(line);
@@ -104,7 +105,7 @@ mod tests {
 
     #[test]
     fn dedup_lines_treats_crlf_and_lf_as_same_line() {
-        // CRLF `/target\r`와 LF `/target`은 같은 라인으로 dedup되고, 출력은 첫 등장(원본)을 보존한다.
+        // CRLF `/target\r` and LF `/target` dedup as the same line; the output keeps the first (original).
         assert_eq!(dedup_lines("/target\r\n/target\n/log"), "/target\r\n/log");
     }
 

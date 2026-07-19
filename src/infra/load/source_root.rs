@@ -1,4 +1,4 @@
-//! `.scaffoldroot` 해석 — `SourceRootSource`.
+//! `.scaffoldroot` resolution — `SourceRootSource`.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -8,9 +8,9 @@ use anyhow::{Context, Result, bail};
 
 use crate::domain::store::SourceRootSource;
 
-/// `<template_root>/.scaffoldroot`를 읽어 실효 소스 루트를 해석한다. 내용은 template_root
-/// 상대 subpath다. 파일이 없으면 template_root 그대로. `..`·절대경로·외부 심링크로 template_root를
-/// 벗어나면 에러.
+/// Reads `<template_root>/.scaffoldroot` to resolve the effective source root. Its content is
+/// a template_root-relative subpath. Absent file → template_root unchanged. `..`, absolute
+/// paths, and external symlinks that escape template_root are errors.
 pub struct FsSourceRootSource;
 
 impl SourceRootSource for FsSourceRootSource {
@@ -19,8 +19,9 @@ impl SourceRootSource for FsSourceRootSource {
         let content = match fs::read_to_string(&marker) {
             Ok(content) => content,
             Err(e) if e.kind() == ErrorKind::NotFound => {
-                // "파일 없음"과 "존재하는 (dangling) 심링크의 대상 없음"을 구분한다 — 둘 다
-                // `read_to_string`에서 NotFound다. marker 자체가 존재하면(심링크 포함) fail-loud.
+                // Distinguish "no file" from "existing (dangling) symlink whose target is
+                // missing" — both give NotFound from read_to_string. If the marker itself
+                // exists (including a symlink), fail loud.
                 match marker.symlink_metadata() {
                     Err(meta_err) if meta_err.kind() == ErrorKind::NotFound => {
                         return Ok(template_root.to_path_buf());
@@ -53,7 +54,7 @@ impl SourceRootSource for FsSourceRootSource {
             bail!(".scaffoldroot {subpath:?} must not contain `..`");
         }
 
-        // 외부 심링크로 벗어나는 경우까지 막기 위해 canonical 경로가 template_root 안인지 확인한다.
+        // Confirm the canonical path is inside template_root, to also block escapes via external symlink.
         let canonical_root = template_root
             .canonicalize()
             .with_context(|| format!("template root {} does not exist", template_root.display()))?;
@@ -121,7 +122,7 @@ mod tests {
     #[test]
     fn rejects_dangling_scaffoldroot_symlink() {
         let dir = TempDir::new().unwrap();
-        // `.scaffoldroot` 자체가 없는 대상을 가리키는 심링크: "부재"로 처리하지 말고 에러.
+        // A .scaffoldroot symlink pointing to a missing target: must error, not be treated as absent.
         symlink(dir.path().join("nowhere"), dir.path().join(".scaffoldroot")).unwrap();
         assert!(FsSourceRootSource.resolve(dir.path()).is_err());
     }

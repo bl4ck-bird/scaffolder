@@ -1,4 +1,4 @@
-//! MiniJinja `Environment` 구성(partials 등록·`scaffolder.*` 빌트인·`env()` 함수) — `Renderer`.
+//! MiniJinja `Environment` setup (partial registration, `scaffolder.*` builtins, `env()`) — `Renderer`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use crate::domain::answer::{AnswerContext, AnswerValue, ScaffolderBuiltins};
 use crate::domain::data::DataValue;
 use crate::domain::render::{Renderer, SyntaxChecker};
 
-/// MiniJinja 기반 `Renderer`. strict undefined와 `scaffolder.*`/`env()` 빌트인을 배선한다.
+/// MiniJinja-based `Renderer`. Wires strict undefined and the `scaffolder.*`/`env()` builtins.
 pub struct MiniJinjaRenderer {
     env: Environment<'static>,
 }
@@ -19,14 +19,14 @@ pub struct MiniJinjaRenderer {
 impl MiniJinjaRenderer {
     pub fn new() -> Self {
         let mut env = base_environment();
-        // minijinja 기본은 trailing newline을 잘라낸다; 생성 파일의 `insert_final_newline` 관례를
-        // 지키려면 보존해야 한다.
+        // minijinja trims the trailing newline by default; preserve it to honor generated files'
+        // `insert_final_newline` convention.
         env.set_keep_trailing_newline(true);
         Self { env }
     }
 
-    /// partials를 명명 템플릿으로 등록해 `{% include "name" %}`가 pull할 수 있게 한다. include는
-    /// 등록된 이름만 해석하므로 `partials/` 밖 include는 불가능(미등록 이름=에러).
+    /// Registers partials as named templates so `{% include "name" %}` can pull them. include only
+    /// resolves registered names, so including outside `partials/` is impossible (unregistered name = error).
     pub fn with_partials(partials: BTreeMap<String, String>) -> Result<Self> {
         let mut env = base_environment();
         env.set_keep_trailing_newline(true);
@@ -38,8 +38,7 @@ impl MiniJinjaRenderer {
     }
 }
 
-/// strict undefined + `env()` 빌트인을 갖춘 기본 `Environment`. 렌더와 `when` 표현식 평가가
-/// 공유한다.
+/// Base `Environment` with strict undefined + the `env()` builtin. Shared by rendering and `when` evaluation.
 pub(crate) fn base_environment() -> Environment<'static> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
@@ -67,9 +66,9 @@ fn env_fn(name: String, default: Option<String>) -> String {
     std::env::var(&name).unwrap_or_else(|_| default.unwrap_or_default())
 }
 
-/// MiniJinja 기반 `SyntaxChecker`. 컴파일(파스)만 하고 렌더/평가는 하지 않으므로 strict-undefined
-/// 변수 참조는 걸리지 않는다 — `template validate`가 런타임 미정의를 false positive로 보고하지
-/// 않기 위한 의도적 설계다.
+/// MiniJinja-based `SyntaxChecker`. It only compiles (parses), never renders/evaluates, so
+/// strict-undefined variable references are not caught — deliberate, so `template validate` does
+/// not report runtime-undefined as a false positive.
 pub struct MiniJinjaSyntaxChecker {
     env: Environment<'static>,
 }
@@ -90,10 +89,10 @@ impl Default for MiniJinjaSyntaxChecker {
 
 impl SyntaxChecker for MiniJinjaSyntaxChecker {
     fn check_template(&self, source: &str) -> Result<()> {
-        // 매 호출 스크래치 environment에 등록해 파스 에러만 잡는다 — 등록된 템플릿을 누적하지
-        // 않는다(반복 validate 호출 간 상태 오염 방지). minijinja 에러를 그대로 anyhow로
-        // 올린다 — 자체 Display가 이미 "syntax error"와 위치를 담으므로 추가 context로
-        // 가리지 않는다.
+        // Register on a fresh scratch environment each call to catch only parse errors — do not
+        // accumulate registered templates (avoids state bleed across repeated validate calls). Raise
+        // the minijinja error as-is into anyhow — its Display already carries "syntax error" and a
+        // location, so don't mask it with extra context.
         let mut env = base_environment();
         env.add_template_owned("__scaffolder_validate__".to_string(), source.to_string())?;
         Ok(())
@@ -105,9 +104,9 @@ impl SyntaxChecker for MiniJinjaSyntaxChecker {
     }
 }
 
-/// `AnswerContext`를 이름 기반 동적 조회로 노출한다. 포트가 전체 열거 API를 제공하지 않으므로
-/// top-level(`{{ name }}`)과 `scaffolder.*` 조회는 값 단위로 위임한다. `when` 표현식 평가와
-/// 컨텍스트 매핑을 공유하기 위해 crate 내부에 노출한다.
+/// Exposes `AnswerContext` via name-based dynamic lookup. The port offers no full-enumeration
+/// API, so top-level (`{{ name }}`) and `scaffolder.*` lookups are delegated value by value.
+/// Exposed crate-internally to share the context mapping with `when` expression evaluation.
 #[derive(Debug)]
 pub(crate) struct RenderContext(pub(crate) AnswerContext);
 
@@ -262,8 +261,8 @@ mod tests {
 
     #[test]
     fn env_present_var_renders_value() {
-        // SAFETY: 테스트 프로세스는 단일 스레드로 env를 다루지 않지만, 테스트 병렬 실행 시
-        // 이름 충돌을 피하기 위해 고유한 var명을 쓰고 끝에 정리한다.
+        // SAFETY: the test process does not manage env single-threaded, but a unique var name
+        // avoids name collisions under parallel test execution and it is cleaned up at the end.
         unsafe {
             std::env::set_var("SC_TEST_PRESENT", "v");
         }
@@ -295,7 +294,7 @@ mod tests {
 
     #[test]
     fn syntax_checker_does_not_error_on_undefined_variable_reference() {
-        // 파스 단계는 strict-undefined를 적용하지 않는다 — 런타임 미정의는 검사 대상이 아니다.
+        // The parse stage does not apply strict-undefined — runtime-undefined is out of scope.
         let checker = MiniJinjaSyntaxChecker::new();
         assert!(
             checker

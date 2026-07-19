@@ -1,4 +1,4 @@
-//! MiniJinja 기반 렌더 어댑터.
+//! MiniJinja-based render adapters.
 
 pub mod expr;
 pub mod filters;

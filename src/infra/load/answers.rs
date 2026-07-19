@@ -1,5 +1,5 @@
-//! `--answers-file` TOML 로딩 — `name = value`를 타입 그대로 `AnswerValue`로 매핑한다.
-//! choices/타입 검증은 pipeline이 questions와 대조해 수행한다(여기선 순수 변환만).
+//! `--answers-file` TOML loading — maps `name = value` to `AnswerValue` keeping its type.
+//! Choice/type validation is done by the pipeline against the questions (here, pure conversion only).
 
 use std::collections::BTreeMap;
 use std::fs;

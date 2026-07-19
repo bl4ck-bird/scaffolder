@@ -1,12 +1,13 @@
-//! 외부 심링크 제어파일 신뢰 가드. 심링크를 follow해 외부를 읽을 수 있는 각
-//! 로더가 읽기 지점에서 호출한다 — pre-flight 스캔이 아니라 접근 지점 검사(파수꾼==실행자)라
-//! 스캔↔읽기 TOCTOU 창이 없다.
+//! Trust guard for external-symlink control files. Called at the read point by each loader
+//! that could follow a symlink to read outside — a check-at-access (guard == executor), not a
+//! pre-flight scan, so there is no scan↔read TOCTOU window.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
-/// `path`의 canonical 경로가 `root_canon` 밖이면(source root 이탈) `trust`가 아닌 한 거부한다.
-/// broken 심링크(canonicalize 실패)도 에러. copier `ForbiddenPathError` 패턴.
+/// Rejects when `path`'s canonical path is outside `root_canon` (escapes the source root)
+/// unless `trust`. A broken symlink (canonicalize failure) also errors. copier's
+/// `ForbiddenPathError` pattern.
 pub fn ensure_within_root(path: &Path, root_canon: &Path, trust: bool) -> Result<()> {
     let canon = path
         .canonicalize()

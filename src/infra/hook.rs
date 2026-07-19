@@ -1,4 +1,4 @@
-//! 프로세스 실행(`sh -c`·폴더 스크립트) — `HookSource`·`HookRunner`.
+//! Process execution (`sh -c`, folder scripts) — `HookSource`, `HookRunner`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::domain::hook::{HookPhase, HookRunner, HookScript, HookSource};
 use crate::infra::load::trust::ensure_within_root;
 
-/// std 프로세스 실행 기반 `HookRunner`.
+/// `HookRunner` backed by std process execution.
 pub struct StdHookRunner;
 
 impl HookRunner for StdHookRunner {
@@ -37,10 +37,10 @@ impl HookRunner for StdHookRunner {
         cwd: &Path,
         env: &BTreeMap<String, String>,
     ) -> Result<()> {
-        // `path`가 상대(상대 template root에서 유래)면 `Command::current_dir(cwd)`가 exec 전
-        // child cwd로 chdir하는 순서는 플랫폼 의존적이라, 상대 program 경로가 `cwd`(target) 기준
-        // ENOENT로 해석될 수 있다. 절대화는 이 프로세스의 실제 cwd(상대 template 인자의 기준)로
-        // 고정해, `cwd` 인자와 무관하게 항상 올바른 스크립트를 찾는다.
+        // If `path` is relative (from a relative template root), whether `Command::current_dir(cwd)`
+        // chdirs the child before exec is platform-dependent, so a relative program path could
+        // resolve ENOENT against `cwd` (target). Making it absolute pins it to this process's real
+        // cwd (the base of the relative template argument), finding the right script regardless of `cwd`.
         let program = std::path::absolute(path)
             .with_context(|| format!("failed to resolve hook script path {}", path.display()))?;
 
@@ -88,16 +88,16 @@ impl HookRunner for StdHookRunner {
     }
 }
 
-/// temp 파일 고유 접미사용 프로세스-로컬 카운터.
+/// Process-local counter for the unique temp-file suffix.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// secure temp hook script 가드. exec 성공·실패·조기 반환 어느 경로든 Drop에서 파일을
-/// 제거한다(Rust에 `defer`가 없어 RAII로 정리를 보장).
+/// Secure temp hook-script guard. Removes the file in `Drop` on any path — exec success,
+/// failure, or early return (Rust has no `defer`, so RAII guarantees cleanup).
 struct TempScript(PathBuf);
 
 impl TempScript {
-    /// `env::temp_dir()`에 `create_new`(O_EXCL, 심링크 미추종)·`mode(0o700)`(소유자 전용)로 유니크
-    /// 파일을 만들어 `content`를 쓴다. `name`은 `sanitize_name`으로 정규화한다.
+    /// Creates a unique file in `env::temp_dir()` with `create_new` (O_EXCL, no symlink follow)
+    /// and `mode(0o700)` (owner-only) and writes `content`. `name` is normalized by `sanitize_name`.
     fn create(name: &str, content: &[u8]) -> Result<Self> {
         use std::io::ErrorKind;
         use std::os::unix::fs::OpenOptionsExt;
@@ -105,9 +105,9 @@ impl TempScript {
         let sanitized = sanitize_name(name);
         let pid = std::process::id();
 
-        // PID 재사용 + 이전 프로세스가 SIGKILL되어 남은 동일 이름 temp 파일과 충돌하면(Drop이
-        // 실행되지 못해 정리되지 않은 leftover), counter를 계속 증가시켜 재시도한다. 다른 종류의
-        // 에러(권한 등)는 재시도해도 해결되지 않으므로 즉시 fatal로 처리한다.
+        // On a collision with a leftover same-name temp file (PID reuse + a prior process
+        // SIGKILLed before Drop could clean up), keep bumping the counter and retry. Other errors
+        // (permissions, etc.) will not resolve on retry, so treat them as immediately fatal.
         const MAX_ATTEMPTS: u32 = 1000;
         let mut last_err = None;
         for _ in 0..MAX_ATTEMPTS {
@@ -165,11 +165,12 @@ impl Drop for TempScript {
     }
 }
 
-/// alphanumeric·`.`·`-`·`_`가 아닌 문자를 전부 `_`로 치환한다. traversal이 막히는 건 이 치환
-/// 자체가 아니라(`.`은 허용 문자라 `..`는 그대로 남는다), 호출부(`TempScript::create`)가 결과
-/// 앞에 항상 `scaffolder-hook-<pid>-<counter>-` 접두사를 붙여 최종 경로를 단일 파일명
-/// 컴포넌트로 고정하고, `name`이 `FsHookSource::scripts`의 `read_dir` file_name(마찬가지로
-/// 단일 컴포넌트)에서만 온다는 불변식 덕분이다.
+/// Replaces every character that is not alphanumeric or `.`/`-`/`_` with `_`. Traversal is
+/// blocked not by this replacement (`.` is allowed, so `..` survives) but by the invariant that
+/// the caller (`TempScript::create`) always prefixes the result with
+/// `scaffolder-hook-<pid>-<counter>-`, pinning the final path to a single file-name component,
+/// and that `name` only ever comes from `FsHookSource::scripts`'s `read_dir` file_name (likewise
+/// a single component).
 fn sanitize_name(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -182,9 +183,9 @@ fn sanitize_name(name: &str) -> String {
         .collect()
 }
 
-/// 파일시스템 기반 `HookSource`: `hooks/<before|after>/`를 파일명 바이트 lexical 순서로 열거한다.
-/// 심링크는 follow해 대상을 검사한다(내부 symlink→file은 실행 가능해야 하므로 skip하지
-/// 않는다), 각 스크립트 경로는 외부 심링크면 `trust` 없이 거부한다.
+/// Filesystem `HookSource`: enumerates `hooks/<before|after>/` in byte-lexical file-name order.
+/// Symlinks are followed to inspect the target (an internal symlink→file must stay runnable, so
+/// it is not skipped); each script path is rejected without `trust` if it is an external symlink.
 pub struct FsHookSource {
     pub root_canon: PathBuf,
     pub trust: bool,
@@ -201,9 +202,9 @@ impl HookSource for FsHookSource {
         if !dir.exists() {
             return Ok(Vec::new());
         }
-        // leaf 가드(아래)는 `read_dir`가 이미 심링크를 follow해 열거를 마친 뒤에야 실행되므로,
-        // 파일 없는 외부 심링크 phase dir는 leaf 가드를 한 번도 못 거치고 통과해 버린다 —
-        // `read_dir` 전에 dir 자체를 가드해 내용과 무관하게 default-reject를 보장한다.
+        // The leaf guard (below) only runs after read_dir has already followed the symlink and
+        // enumerated, so a fileless external-symlink phase dir would slip past it entirely — guard
+        // the dir itself before read_dir to guarantee default-reject regardless of contents.
         ensure_within_root(&dir, &self.root_canon, self.trust)?;
 
         let mut names: Vec<String> = Vec::new();
@@ -213,8 +214,8 @@ impl HookSource for FsHookSource {
             let entry =
                 entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
             let path = entry.path();
-            // follow해 판정한다: no-follow(`file_type()`)면 내부 symlink→file 훅이 skip돼 버린다.
-            // broken 심링크는 fail-loud(조용히 skip하면 의도한 훅이 실행되지 않고 사라진다).
+            // Decide by following: no-follow (`file_type()`) would skip an internal symlink→file
+            // hook. A broken symlink is fail-loud (silently skipping would drop an intended hook).
             match fs::metadata(&path) {
                 Ok(meta) if meta.is_file() => {}
                 Ok(_) => continue,
@@ -259,8 +260,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
 
-    /// 여러 테스트가 공유 OS `env::temp_dir()`에서 `scaffolder-hook-` 파일 생성·잔존을 검사한다.
-    /// 병렬 테스트 스레드가 서로의 임시 파일을 오탐지하지 않도록 이 그룹을 직렬화한다.
+    /// Several tests check creation/leftover of `scaffolder-hook-` files in the shared OS
+    /// `env::temp_dir()`. Serialize this group so parallel test threads don't mistake each other's temp files.
     static TEMP_DIR_SCAN_LOCK: Mutex<()> = Mutex::new(());
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -334,9 +335,9 @@ mod tests {
 
     #[test]
     fn run_rendered_creates_temp_file_with_owner_only_mode() {
-        // TempScript::create가 실행 도중 잠깐 존재하는 파일의 모드를 검증하기 위해, 정리 전에
-        // 파일 자체를 직접 만들어 모드를 확인한다(exec은 이 테스트의 관심사가 아니다). temp
-        // 파일이 살아있는 동안 다른 temp-dir 스캔 테스트와 겹치지 않도록 같은 lock을 공유한다.
+        // To check the mode of the file TempScript::create briefly holds during execution, create
+        // the file directly and inspect its mode before cleanup (exec is not this test's concern).
+        // Share the same lock so it doesn't overlap other temp-dir scan tests while the file is alive.
         let _guard = TEMP_DIR_SCAN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp =
             super::TempScript::create("mode-check.sh", b"#!/bin/sh\ntrue\n").expect("create");
@@ -344,8 +345,8 @@ mod tests {
         assert_eq!(meta.permissions().mode() & 0o777, 0o700);
     }
 
-    /// `base`에서 `target`으로의 순수 lexical 상대 경로(fs 접근 없음, symlink 무관) — 테스트가
-    /// 프로세스 cwd 밖에 있는 스크립트를 상대 경로로 가리키기 위한 헬퍼.
+    /// A purely lexical relative path from `base` to `target` (no fs access, symlink-agnostic) —
+    /// a helper for tests to point at a script outside the process cwd by relative path.
     fn relative_from(base: &Path, target: &Path) -> PathBuf {
         let base_comps: Vec<_> = base.components().collect();
         let target_comps: Vec<_> = target.components().collect();
@@ -382,10 +383,10 @@ mod tests {
             "test setup must produce a relative path, got {relative:?}"
         );
 
-        // `target`(hook의 `cwd` 인자)를 process cwd보다 훨씬 깊게 만들어, `relative`의 `..`
-        // 개수가 root에서 clamp되어 우연히 올바른 절대 경로로 수렴하는 경우를 배제한다 — 그래야
-        // "process cwd 기준으로 절대화" 대 "`current_dir`로 넘긴 target 기준 exec 해석"이 실제로
-        // 다른 결과를 낸다.
+        // Make `target` (the hook's `cwd` argument) far deeper than the process cwd so that
+        // `relative`'s `..` count clamping at root cannot accidentally converge on the right
+        // absolute path — only then do "absolutize against process cwd" and "exec resolution
+        // against the `current_dir` target" actually differ.
         let target_base = tempfile::tempdir().expect("target base tempdir");
         let mut target_path = target_base.path().to_path_buf();
         for i in 0..40 {
@@ -403,10 +404,9 @@ mod tests {
 
     #[test]
     fn create_retries_on_leftover_name_collision_instead_of_failing() {
-        // PID 재사용 + 이전 프로세스가 SIGKILL되어 남은 temp 파일 시나리오를 재현: counter가
-        // 만들 다음 경로를 미리 점유해 둔다. lock을 test 전체에서 유지해, 이 사이 다른 스레드가
-        // TEMP_COUNTER를 건드리지 못하게 한다(이 파일의 TempScript::create 호출부는 전부 이 락을
-        // 공유한다).
+        // Reproduces the PID-reuse + SIGKILLed-leftover scenario: pre-occupy the next path the
+        // counter will produce. Hold the lock across the whole test so no other thread touches
+        // TEMP_COUNTER meanwhile (all TempScript::create callers in this file share this lock).
         let _guard = TEMP_DIR_SCAN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let counter_before = TEMP_COUNTER.load(Ordering::Relaxed);

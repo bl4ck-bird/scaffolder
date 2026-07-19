@@ -1,4 +1,4 @@
-//! `partials/` 로드 — `PartialSource`.
+//! `partials/` loading — `PartialSource`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -9,8 +9,9 @@ use anyhow::{Context, Result, anyhow};
 use crate::domain::render::PartialSource;
 use crate::infra::load::trust::ensure_within_root;
 
-/// `<template_root>/partials/` 하위 조각을 이름→소스로 로드한다. `partials/`가 없으면 빈 맵.
-/// `partials/` 루트나 재귀 하위의 leaf가 외부 심링크(dir 경유 포함)면 `trust` 없이 거부한다.
+/// Loads the fragments under `<template_root>/partials/` as name→source. Absent `partials/` →
+/// empty map. The `partials/` root, or any leaf reached recursively (including via a dir), is
+/// rejected without `trust` if it is an external symlink.
 pub struct FsPartialSource {
     pub root_canon: PathBuf,
     pub trust: bool,
@@ -24,10 +25,10 @@ impl PartialSource for FsPartialSource {
             return Ok(out);
         }
         ensure_within_root(&partials_dir, &self.root_canon, self.trust)?;
-        // 재귀 시작 dir을 조상 체인에 미리 넣어, 심링크 하위 dir이 partials 루트(또는 조상)를
-        // 되가리키는 진짜 cycle을 첫 재진입에서 차단한다. 이 집합은 "현재 재귀 경로의 조상"만
-        // 담는다(모든 방문 dir 누적이 아니다) — 그래야 diamond(서로 다른 두 심링크가 같은 내부
-        // dir을 가리키는 것, cycle 아님)가 둘 다 순회된다.
+        // Seed the ancestor chain with the recursion's start dir so a true cycle — a symlinked
+        // subdir pointing back at the partials root (or an ancestor) — is cut at first re-entry.
+        // This set holds only "ancestors of the current recursion path" (not all visited dirs), so
+        // a diamond (two distinct symlinks to the same inner dir, not a cycle) is still traversed on both.
         let root_dir_canon = partials_dir.canonicalize().with_context(|| {
             format!("failed to resolve partials dir {}", partials_dir.display())
         })?;
@@ -58,9 +59,9 @@ fn collect(
     for entry in entries {
         let entry = entry.with_context(|| format!("failed to read entry in {}", dir.display()))?;
         let path = entry.path();
-        // follow해 판정한다: no-follow(`DirEntry::file_type()`)는 심링크-to-디렉토리를 symlink로
-        // 봐 leaf로 오판하고 `read_to_string`이 "Is a directory"로 실패한다(--trust로 dir 심링크를
-        // 허용해도 안 내려가면 완결성이 깨진다). broken 심링크는 fail-loud.
+        // Decide by following: no-follow (`DirEntry::file_type()`) sees a symlink-to-directory as a
+        // symlink, misjudges it as a leaf, and read_to_string then fails with "Is a directory"
+        // (allowing dir symlinks via --trust but not descending breaks completeness). Broken symlink = fail-loud.
         let meta = fs::metadata(&path)
             .with_context(|| format!("failed to stat {} (broken symlink?)", path.display()))?;
         if meta.is_dir() {
@@ -68,8 +69,8 @@ fn collect(
             let canon = path
                 .canonicalize()
                 .with_context(|| format!("failed to resolve {}", path.display()))?;
-            // 심링크 dir이 자신의 조상(자기 자신 포함)을 가리키는 진짜 cycle만 끊는다 — 형제
-            // 가지에서 이미 방문한 dir은(diamond) 조상이 아니므로 걸리지 않는다.
+            // Cut only a true cycle where a symlinked dir points at its own ancestor (including
+            // itself) — a dir already visited on a sibling branch (diamond) is not an ancestor.
             if ancestors.contains(&canon) {
                 continue;
             }
@@ -80,8 +81,8 @@ fn collect(
             let rel = path.strip_prefix(root).with_context(|| {
                 format!("partial path {} escaped partials root", path.display())
             })?;
-            // 이름은 `{% include %}`에서 UTF-8 문자열로 참조되므로 비-UTF8 경로는 lossy 변환 시
-            // 다른 파일과 같은 이름으로 축약돼 조용히 덮어쓸 수 있다 — fail-loud로 거부한다.
+            // Names are referenced as UTF-8 strings in `{% include %}`, so a non-UTF-8 path could
+            // collapse under lossy conversion to another file's name and silently overwrite it — fail loud.
             let name = rel
                 .to_str()
                 .ok_or_else(|| anyhow!("partial name {} is not valid UTF-8", rel.display()))?
@@ -262,10 +263,10 @@ mod tests {
         );
     }
 
-    /// diamond: 서로 다른 두 심링크(`a`, `b`)가 같은 내부 dir(`real`)을 가리키는 것은 cycle이
-    /// 아니다 — partial 이름은 partials-root-상대경로라 `a/x`≠`b/x`≠`real/x`이므로 셋 다 로드돼야
-    /// 한다. 전역 visited(모든 방문 dir 누적)는 먼저 처리된 alias만 남기고 나머지를 조용히
-    /// 누락시킨다; ancestor-chain(현재 재귀 경로의 조상만 추적)이어야 diamond가 보존된다.
+    /// diamond: two distinct symlinks (`a`, `b`) to the same inner dir (`real`) is not a cycle —
+    /// partial names are partials-root-relative, so `a/x`≠`b/x`≠`real/x` and all three must load. A
+    /// global visited set (all visited dirs) would keep only the first-processed alias and silently
+    /// drop the rest; an ancestor chain (only the current recursion path) preserves the diamond.
     #[test]
     fn diamond_symlinked_dirs_both_load_independently() {
         use std::os::unix::fs::symlink;
@@ -292,7 +293,7 @@ mod tests {
         let partials = dir.path().join("partials");
         fs::create_dir_all(&partials).unwrap();
         fs::write(partials.join("greeting"), "hi").unwrap();
-        // `partials/loop` -> `partials` 자기 자신을 가리키는 순환.
+        // `partials/loop` -> `partials`: a cycle pointing back at itself.
         symlink(&partials, partials.join("loop")).unwrap();
 
         let loaded = source(dir.path()).load(dir.path()).unwrap();
