@@ -1,26 +1,50 @@
 # scaffolder
 
-A declarative project scaffolding CLI. It renders a template directory
-(`scaffold.toml` + `files/`) into a new project, substituting answers you
-provide into any file named with a `.jinja` suffix and copying the rest
-verbatim.
+> Scaffold new projects from declarative, reusable templates.
 
-## Why
+[![CI](https://github.com/bl4ck-bird/scaffolder/actions/workflows/ci.yml/badge.svg)](https://github.com/bl4ck-bird/scaffolder/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/bl4ck-bird/scaffolder?sort=semver)](https://github.com/bl4ck-bird/scaffolder/releases)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-Most scaffolding tools either hide their logic behind opaque generators or
-require a full scripting runtime. `scaffolder` is a single native binary
-with no runtime dependencies: a template is just a directory of files plus
-a small TOML manifest describing the questions it needs answered.
+`scaffolder` turns a folder of files plus a small TOML manifest into a new
+project. You describe the questions a template needs and mark which files
+should be rendered; `scaffolder apply` fills them in — interactively or from
+the command line.
 
-## Install
+```sh
+scaffolder apply rust-starter ./my-app --answers project=my-app
+```
+
+## Features
+
+- **Templates are just files.** A template is a directory with a
+  `scaffold.toml` manifest and a `files/` payload — there is no template DSL
+  to learn.
+- **Type-preserving rendering.** Files ending in `.jinja` are rendered with
+  your answers (via [MiniJinja](https://github.com/mitsuhiko/minijinja));
+  everything else is copied byte-for-byte. Answers keep their declared type
+  (`string`, `int`, `float`, `boolean`, `select`, `multiselect`) all the way
+  through rendering.
+- **Interactive or scripted.** Answer questions at a prompt, or pass them
+  with `--answers` / `--answers-file` for fully non-interactive runs.
+- **Conditional questions and files.** A `when` expression can skip a
+  question based on earlier answers, and `.scaffoldignore` can leave files
+  out of the generated project.
+- **Partials, data, and hooks.** Reuse snippets with `{% include %}`, expose
+  static values as `data.*`, and run `before` / `after` shell hooks (gated
+  behind a confirmation prompt).
+- **Safe by default.** Writes stay inside the target, overwrites and
+  out-of-target writes require confirmation, and each file is written
+  atomically. If a run fails partway, the target it created is cleaned up.
+- **A single binary.** No runtime or interpreter to install.
+
+## Installation
 
 Build from source with Cargo:
 
 ```sh
-cargo build --release
+cargo build --release   # binary at target/release/scaffolder
 ```
-
-The binary is written to `target/release/scaffolder`.
 
 Or install straight from the repository:
 
@@ -28,13 +52,12 @@ Or install straight from the repository:
 cargo install --git https://github.com/bl4ck-bird/scaffolder
 ```
 
-## Usage
+## Quick start
 
-A template is a directory containing a `scaffold.toml` manifest and a
-`files/` directory with the payload to render:
+A template is a directory with a manifest and a payload:
 
 ```
-my-template/
+rust-starter/
   scaffold.toml
   files/
     README.md.jinja
@@ -54,103 +77,90 @@ type = "string"
 default = "MIT"
 ```
 
-Files ending in `.jinja` are rendered with the answers (and are written
-without the `.jinja` suffix); every other file is copied byte-for-byte. A
-file whose basename starts with `executable_`, `private_`, and/or
-`readonly_` (stackable, in any order, e.g. `executable_private_deploy.sh`)
-gets the matching Unix permission bits on the written file; the prefix is
-stripped from the output name. Mode prefixes are Unix-only.
-
-Questions can be typed as `string`, `int`, `float`, `boolean`, `select`, or
-`multiselect`; answers keep their declared type through rendering.
-
-Apply a template to a new directory:
+Apply it to a new directory:
 
 ```sh
-scaffolder apply my-template ./demo --answers project=demo
+scaffolder apply rust-starter ./my-app --answers project=my-app
 ```
 
-The template argument is either a path to a local template directory or the
-name of a template in a store. A name is looked up as
-`<store>/<name>/scaffold.toml`, searching, in order: the `--template-dir`
-override, `$SCAFFOLDER_HOME`, `$XDG_CONFIG_HOME/scaffolder`, and
-`~/.scaffolder`.
+`files/README.md.jinja` is rendered — `{{ project }}` becomes `my-app` — and
+written as `README.md`, while `src/main.rs` is copied unchanged.
 
-Answers for any question without a supplied value fall back to its
-`default`; a question with no default and no supplied answer is an error,
-unless you're at an interactive terminal, in which case you'll be prompted
-for it.
-
-A question may carry a `when` expression referencing earlier answers (for
-example `when = "'ci' in stacks"`); when it evaluates false the question is
-skipped and its default, if any, is used.
-
-A `.scaffoldignore` file (or `.scaffoldignore.jinja`, rendered with the
-answers) lists gitignore-style patterns for output paths to leave out of
-the generated project.
-
-### Partials, data, and hooks
-
-A template can also include:
-
-- `partials/` — reusable snippets pulled into any rendered file with
-  `{% include "name" %}`. Partials are always rendered, even when included
-  from a file that has no `.jinja` suffix of their own.
-- `data/*.toml` — static TOML loaded without rendering and exposed to every
-  template file as `data.*` (a `[data]` table in a `data/*.toml` file
-  merges into the same namespace).
-- Hooks — shell commands run around the write phase. Declare inline
-  commands as `[[hooks.before]]` / `[[hooks.after]]` `run = "..."` entries
-  in `scaffold.toml`, and/or drop scripts into `hooks/before/` and
-  `hooks/after/` (executable files run as-is; scripts with a template
-  extension are rendered first). Hook execution is gated behind a
-  confirmation prompt; pass `--yes` to `apply` to skip it.
-
-### Flags
-
-| flag | |
-|---|---|
-| `--name <n>` | value for the `scaffolder.name` template variable (default: target directory basename) |
-| `--answers K=V` | answer a question non-interactively; repeatable |
-| `--answers-file <path>` | TOML file of answers (`name = value`); a matching `--answers K=V` takes precedence over the same key here |
-| `--defaults` | use each question's default without prompting; fails if a question has no default |
-| `--force` | overwrite existing files in the target without prompting |
-| `--yes` | run the template's hooks without the confirmation prompt |
-| `--trust` | allow reading control files reached by a symlink that points outside the template (default: refuse) |
-| `--dry-run` | print the write plan without touching the filesystem |
-| `--template-dir <path>` | directory to resolve a template name against, before the default store locations |
-| `--no-cleanup-on-failure` | keep a newly created target if `apply` fails partway (default: the target is removed) |
-
-Running without `--force` against an existing file fails unless you are at
-an interactive terminal and confirm the overwrite.
-
-If `apply` creates a new target directory and then fails (a failing hook, a
-write error), that directory is removed so no half-written project is left
-behind; a target that already existed is always preserved. Pass
-`--no-cleanup-on-failure` to keep the partial output instead. Cleanup is
-best-effort — it does not cover interruption by a signal, `SIGKILL`, or power
-loss.
-
-### Example
-
-`examples/rust-starter/` is a working template you can apply directly:
+The `examples/rust-starter/` template in this repository is ready to run:
 
 ```sh
 scaffolder apply examples/rust-starter ./demo --answers stacks=docker,ci
 ```
 
-It demonstrates conditional stacks (a `multiselect` question toggling
-`Dockerfile`/CI files via `.scaffoldignore.jinja`'s rendered Jinja
-conditions), a partial pulled in and deduplicated across `.gitignore.jinja`,
-`executable_` mode bits on a build script, and a GitHub Actions workflow
-whose `${{ matrix.os }}` syntax passes through untouched because the file
-has no `.jinja` suffix.
+It shows off conditional files (a `multiselect` toggling `Dockerfile` and CI
+files), a partial deduplicated across `.gitignore`, `executable_` mode bits on
+a build script, and a GitHub Actions workflow whose `${{ matrix.os }}` syntax
+passes through untouched because that file has no `.jinja` suffix.
 
-## Managing the template store
+## How templates work
 
-Beyond `apply`, `scaffolder template` manages templates kept in a store
-(the same `--template-dir` / `$SCAFFOLDER_HOME` / `$XDG_CONFIG_HOME/scaffolder`
-/ `~/.scaffolder` lookup order used by `apply`):
+### Rendering and file names
+
+Files ending in `.jinja` are rendered with your answers and written **without**
+the suffix. Every other file is copied verbatim, so literal `${{ ... }}` syntax
+(in a CI workflow, say) passes through untouched.
+
+A file's basename may carry stackable Unix **mode prefixes** — `executable_`,
+`private_`, and `readonly_`, in any order (e.g. `executable_private_deploy.sh`).
+They set the corresponding permission bits on the written file and are stripped
+from the output name. Mode prefixes are Unix-only.
+
+### Questions and answers
+
+Questions are typed `string`, `int`, `float`, `boolean`, `select`, or
+`multiselect`. For each question, the value is taken from the first of these
+that applies:
+
+1. a matching `--answers K=V` on the command line,
+2. a matching key in `--answers-file`,
+3. the question's `default` (with `--defaults`, or non-interactively),
+4. an interactive prompt, when you are at a terminal.
+
+A question with no supplied value and no `default` is an error, unless you can
+be prompted for it. A `when` expression can gate a question on earlier answers
+— for example `when = "'ci' in stacks"` — and when it is false the question is
+skipped and its default, if any, is used.
+
+### Leaving files out
+
+A `.scaffoldignore` file (or `.scaffoldignore.jinja`, rendered with your
+answers) lists gitignore-style patterns for output paths to omit from the
+generated project.
+
+### Finding a template
+
+The template argument is either a path to a local template directory or the
+name of a template in a **store**. A name is looked up as
+`<store>/<name>/scaffold.toml`, searching in order: the `--template-dir`
+override, `$SCAFFOLDER_HOME`, `$XDG_CONFIG_HOME/scaffolder`, and
+`~/.scaffolder`.
+
+### Partials, data, and hooks
+
+A template can also include:
+
+- **`partials/`** — reusable snippets pulled into any rendered file with
+  `{% include "name" %}`. Partials are always rendered, even when the file
+  including them has no `.jinja` suffix of its own.
+- **`data/*.toml`** — static TOML loaded without rendering and exposed to
+  every template file as `data.*` (a `[data]` table in `scaffold.toml` merges
+  into the same namespace).
+- **Hooks** — shell commands run around the write phase. Declare inline
+  commands with `[[hooks.before]]` / `[[hooks.after]]` `run = "..."` in
+  `scaffold.toml`, and/or drop scripts into `hooks/before/` and `hooks/after/`
+  (executable files run as-is; scripts with a `.jinja` extension are rendered
+  first). Hook execution is gated behind a confirmation prompt; pass `--yes` to
+  run them without it.
+
+## Managing templates
+
+Beyond `apply`, the `scaffolder template` subcommands manage a store of
+templates (using the same lookup order as `apply`):
 
 ```sh
 scaffolder template list [--template-dir <path>]
@@ -158,19 +168,39 @@ scaffolder template new <name> [--full] [--template-dir <path>]
 scaffolder template validate [names...] [--template-dir <path>]
 ```
 
-- `list` prints every template found across the store locations; if the
-  same name exists in more than one, each occurrence is shown with its
-  base path.
-- `new <name>` scaffolds a fresh template skeleton in the
-  highest-priority store base. Without `--full` you get a minimal valid
-  template (`scaffold.toml` + `files/` + a sample file); `--full` adds
-  `partials/`, `data/`, and `hooks/` samples on top. Fails if a template
-  with that name already exists.
-- `validate [names...]` statically checks templates — manifest schema,
-  question `when` expressions, file name grammar, partial references,
-  `.jinja` syntax, and output-name conflicts. With no names it validates
-  every template in the store; problems are reported grouped by kind and
-  the command exits non-zero.
+- **`list`** prints every template found across the store locations. If the
+  same name exists in more than one, each occurrence is shown with its base
+  path.
+- **`new <name>`** scaffolds a fresh template skeleton in the highest-priority
+  store. The default is a minimal valid template; `--full` also adds
+  `partials/`, `data/`, and `hooks/` samples. It fails if the name already
+  exists.
+- **`validate [names...]`** statically checks templates — manifest schema,
+  `when` expressions, file-name grammar, partial references, `.jinja` syntax,
+  and output-name conflicts. With no names it validates the whole store;
+  problems are grouped by kind and the command exits non-zero.
+
+## `apply` flags
+
+| Flag | Description |
+|---|---|
+| `--name <n>` | value for the `scaffolder.name` template variable (default: the target directory's basename) |
+| `--answers K=V` | answer a question non-interactively; repeatable |
+| `--answers-file <path>` | TOML file of answers (`name = value`); a matching `--answers K=V` wins over the same key here |
+| `--defaults` | use each question's default without prompting; fails if a question has no default |
+| `--force` | overwrite existing files in the target without prompting |
+| `--yes` | run the template's hooks without the confirmation prompt |
+| `--trust` | allow reading control files reached by a symlink pointing outside the template (default: refuse) |
+| `--dry-run` | print the write plan without touching the filesystem |
+| `--template-dir <path>` | directory to resolve a template name against, before the default store locations |
+| `--no-cleanup-on-failure` | keep a newly created target if `apply` fails partway (default: it is removed) |
+
+Running without `--force` against an existing file fails unless you are at a
+terminal and confirm the overwrite. If `apply` creates a new target and then
+fails, that target is removed so no half-written project is left behind (a
+pre-existing target is always preserved); pass `--no-cleanup-on-failure` to
+keep the partial output instead. Cleanup is best-effort and does not cover
+interruption by a signal, `SIGKILL`, or power loss.
 
 ## Development
 
