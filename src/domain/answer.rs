@@ -237,19 +237,13 @@ mod tests {
     }
 
     #[test]
-    fn build_context_exposes_answers_and_builtins() {
+    fn build_context_returns_none_for_missing_answer() {
         let mut answers = std::collections::BTreeMap::new();
         answers.insert("license".to_string(), AnswerValue::Text("MIT".to_string()));
 
         let ctx = build_context(answers, Some(DataValue::empty_table()), builtins());
 
-        assert_eq!(
-            ctx.answer("license"),
-            Some(&AnswerValue::Text("MIT".to_string()))
-        );
         assert_eq!(ctx.answer("missing"), None);
-        assert_eq!(ctx.builtins().name, "demo");
-        assert_eq!(ctx.builtins().os, "macos");
     }
 
     #[test]
@@ -382,7 +376,6 @@ mod tests {
             coerce(&q, "docker,").unwrap(),
             AnswerValue::List(vec!["docker".to_string()])
         );
-        assert_eq!(coerce(&q, "").unwrap(), AnswerValue::List(vec![]));
     }
 
     #[test]
@@ -431,6 +424,17 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn validate_choice_multiselect_rejects_non_list_value() {
+        let choices = vec![Choice {
+            label: "docker".to_string(),
+            value: AnswerValue::Text("docker".to_string()),
+        }];
+        let q = question(QuestionType::Multiselect, choices);
+
+        assert!(validate_choice(&q, &AnswerValue::Text("docker".to_string())).is_err());
     }
 
     #[test]

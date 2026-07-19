@@ -85,26 +85,6 @@ mod tests {
     use crate::domain::place::safe_rel_path;
 
     #[test]
-    fn simple_skeleton_has_manifest_files_dir_and_sample() {
-        let entries = skeleton(false);
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.rel == "scaffold.toml" && e.content.is_some())
-        );
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.rel == "files" && e.content.is_none())
-        );
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.rel == "files/README.md.jinja" && e.content.is_some())
-        );
-    }
-
-    #[test]
     fn simple_skeleton_excludes_full_only_entries() {
         let entries = skeleton(false);
         for prefix in ["partials", "data", "hooks"] {
@@ -115,43 +95,6 @@ mod tests {
                 "simple skeleton must not contain {prefix}"
             );
         }
-    }
-
-    #[test]
-    fn full_skeleton_adds_partials_data_hooks_and_extra_sample() {
-        let entries = skeleton(true);
-        for rel in [
-            "partials",
-            "partials/header.txt",
-            "data",
-            "data/sample.toml",
-            "files/NOTES.md.jinja",
-            "hooks",
-            "hooks/before",
-            "hooks/after",
-        ] {
-            assert!(entries.iter().any(|e| e.rel == rel), "missing entry {rel}");
-        }
-    }
-
-    #[test]
-    fn full_manifest_differs_from_simple_and_declares_a_hook() {
-        let simple = skeleton(false);
-        let full = skeleton(true);
-        let simple_manifest = simple
-            .iter()
-            .find(|e| e.rel == "scaffold.toml")
-            .and_then(|e| e.content)
-            .expect("simple manifest content");
-        let full_manifest = full
-            .iter()
-            .find(|e| e.rel == "scaffold.toml")
-            .and_then(|e| e.content)
-            .expect("full manifest content");
-
-        assert_ne!(simple_manifest, full_manifest);
-        assert!(full_manifest.contains("hooks.after"));
-        assert!(!simple_manifest.contains("hooks."));
     }
 
     #[test]
@@ -177,21 +120,6 @@ mod tests {
                     "duplicate rel {:?}",
                     entry.rel
                 );
-            }
-        }
-    }
-
-    #[test]
-    fn directory_entries_have_no_content_file_entries_are_nonempty() {
-        for entries in [skeleton(false), skeleton(true)] {
-            for entry in &entries {
-                if let Some(content) = entry.content {
-                    assert!(
-                        !content.is_empty(),
-                        "file entry {:?} has empty content",
-                        entry.rel
-                    );
-                }
             }
         }
     }

@@ -89,6 +89,22 @@ mod tests {
     }
 
     #[test]
+    fn stacks_mode_prefixes_in_encountered_order() {
+        let parsed = parse_file_name("executable_readonly_run.sh.jinja").unwrap();
+        assert_eq!(parsed.output_base, "run.sh");
+        assert!(parsed.render);
+        assert_eq!(parsed.modes, vec![Mode::Executable, Mode::Readonly]);
+    }
+
+    #[test]
+    fn underscore_in_basename_is_not_a_mode_prefix() {
+        let parsed = parse_file_name("my_file.txt").unwrap();
+        assert_eq!(parsed.output_base, "my_file.txt");
+        assert!(!parsed.render);
+        assert!(parsed.modes.is_empty());
+    }
+
+    #[test]
     fn empty_basename_after_strip_is_error() {
         assert!(parse_file_name(".jinja").is_err());
     }

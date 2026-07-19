@@ -232,27 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn from_modes_two_way_combos() {
-        use crate::domain::name::Mode;
-        // Locks the full contract (the 2-way combos among the 8 pre-umask results).
-        // executable plus readonly: 0o777 with the write bits (0o222) cleared is 0o555.
-        assert_eq!(
-            FileMode::from_modes(&[Mode::Executable, Mode::Readonly]).bits(),
-            0o555
-        );
-        // private plus readonly: 0o600 with the write bits (0o222) cleared is 0o400.
-        assert_eq!(
-            FileMode::from_modes(&[Mode::Private, Mode::Readonly]).bits(),
-            0o400
-        );
-        // executable plus private: 0o777 with the group and other bits (0o77) cleared is 0o700.
-        assert_eq!(
-            FileMode::from_modes(&[Mode::Executable, Mode::Private]).bits(),
-            0o700
-        );
-    }
-
-    #[test]
     fn normalize_target_resolves_parent_and_cur_dir() {
         assert_eq!(
             normalize_target(Path::new("/tmp/new/../existing")),

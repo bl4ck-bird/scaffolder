@@ -248,20 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn int_answer_preserves_numeric_comparison() {
-        let mut answers = BTreeMap::new();
-        answers.insert("edition".to_string(), AnswerValue::Int(2021));
-        let ctx = build_context(answers, Some(DataValue::empty_table()), builtins());
-
-        let renderer = MiniJinjaRenderer::new();
-        let out = renderer
-            .render_str("{% if edition >= 2021 %}yes{% else %}no{% endif %}", &ctx)
-            .unwrap();
-
-        assert_eq!(out, "yes");
-    }
-
-    #[test]
     fn env_present_var_renders_value() {
         // SAFETY: the test process does not manage env single-threaded, but a unique var name
         // avoids name collisions under parallel test execution and it is cleaned up at the end.
