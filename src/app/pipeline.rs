@@ -11,12 +11,12 @@ use anyhow::{bail, Result};
 
 use crate::app::hooks::{collect_active_inline, confirm_description, run_phase};
 use crate::domain::answer::{
-    build_context, coerce, validate_choice, AnswerSource, AnswerValue, ConditionEvaluator,
-    ScaffolderBuiltins,
+    build_context, coerce, validate_choice, AnswerContext, AnswerSource, AnswerValue,
+    ConditionEvaluator, ScaffolderBuiltins,
 };
 use crate::domain::data::DataSource;
-use crate::domain::hook::{hook_env, Confirmer, HookPhase, HookRunner, HookSource};
-use crate::domain::ignore::IgnoreSource;
+use crate::domain::hook::{hook_env, Confirmer, Hook, HookPhase, HookRunner, HookScript, HookSource};
+use crate::domain::ignore::{IgnoreMatcher, IgnoreSource};
 use crate::domain::manifest::ManifestSource;
 use crate::domain::name::parse_file_name;
 use crate::domain::place::{safe_rel_path, FileMode, PayloadStore, RelPath, TargetPreparation};
@@ -68,6 +68,32 @@ struct AnswerPorts<'a> {
     condition_evaluator: &'a dyn ConditionEvaluator,
 }
 
+/// dry-run 이후 수집된 훅 묶음. 인라인 훅은 `manifest`를 빌리므로 수명이 얽혀 있다.
+struct CollectedHooks<'a> {
+    before_inline: Vec<&'a Hook>,
+    before_scripts: Vec<HookScript>,
+    after_inline: Vec<&'a Hook>,
+    after_scripts: Vec<HookScript>,
+}
+
+impl CollectedHooks<'_> {
+    fn is_empty(&self) -> bool {
+        self.before_inline.is_empty()
+            && self.before_scripts.is_empty()
+            && self.after_inline.is_empty()
+            && self.after_scripts.is_empty()
+    }
+
+    fn describe(&self) -> String {
+        confirm_description(
+            &self.before_inline,
+            &self.before_scripts,
+            &self.after_inline,
+            &self.after_scripts,
+        )
+    }
+}
+
 pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts) -> Result<ApplyReport> {
     let manifest_path = req.template_root.join("scaffold.toml");
     let manifest = ports.manifest_src.load(&manifest_path)?;
@@ -94,6 +120,44 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
     let ctx = build_context(answers, Some(data), builtins);
     let matcher = ports.ignore_source.load(&req.template_root, &ctx)?;
 
+    let planned = plan_writes(req, &ctx, matcher.as_ref(), &ports)?;
+
+    if req.dry_run {
+        return Ok(ApplyReport { planned });
+    }
+
+    // dry-run 이후에만 훅을 수집한다 — dry-run은 훅과 무관하다.
+    let hooks = CollectedHooks {
+        before_inline: collect_active_inline(&manifest.hooks.before, &ctx, ports.condition_evaluator)?,
+        after_inline: collect_active_inline(&manifest.hooks.after, &ctx, ports.condition_evaluator)?,
+        before_scripts: ports.hook_source.scripts(&req.template_root, HookPhase::Before)?,
+        after_scripts: ports.hook_source.scripts(&req.template_root, HookPhase::After)?,
+    };
+
+    // before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
+    if !hooks.is_empty() && !ports.confirmer.confirm_hook(&hooks.describe()) {
+        bail!("hook execution was not confirmed; aborting before any writes");
+    }
+
+    // target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
+    // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
+    let prep = ports.payload.ensure_target(&req.target_root)?;
+
+    let outcome = execute_side_effects(req, &planned, &ctx, &hooks, &hook_env_map, &ports);
+    cleanup_created_target_on_failure(outcome, prep, req, ports.payload)?;
+
+    Ok(ApplyReport { planned })
+}
+
+/// 부작용 없는 plan 단계: payload 엔트리를 열거해 파일명 문법을 파싱하고, `.scaffoldignore`
+/// 매칭 출력 경로를 제외하며, 소스 충돌(다른 엔트리가 같은 출력 경로로 매핑)을 검출하고,
+/// `.jinja` 엔트리를 렌더한 `PlannedWrite` 목록을 만든다.
+fn plan_writes(
+    req: &ApplyRequest,
+    ctx: &AnswerContext,
+    matcher: &dyn IgnoreMatcher,
+    ports: &ApplyPorts,
+) -> Result<Vec<PlannedWrite>> {
     let files_root = req.template_root.join("files");
     let entries = ports.payload.list_entries(&files_root)?;
 
@@ -125,7 +189,7 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         let content = if parsed.render {
             let text = String::from_utf8(raw)
                 .map_err(|_| anyhow::anyhow!("entry {} is not valid UTF-8 but is marked for rendering", entry.rel))?;
-            ports.renderer.render_str(&text, &ctx)?.into_bytes()
+            ports.renderer.render_str(&text, ctx)?.into_bytes()
         } else {
             raw
         };
@@ -138,102 +202,94 @@ pub fn apply(req: &ApplyRequest, builtins: ScaffolderBuiltins, ports: ApplyPorts
         });
     }
 
-    if req.dry_run {
-        return Ok(ApplyReport { planned });
-    }
+    Ok(planned)
+}
 
-    // dry-run 이후에만 훅을 수집한다 — dry-run은 훅과 무관하다.
-    let before_inline = collect_active_inline(&manifest.hooks.before, &ctx, ports.condition_evaluator)?;
-    let after_inline = collect_active_inline(&manifest.hooks.after, &ctx, ports.condition_evaluator)?;
-    let before_scripts = ports.hook_source.scripts(&req.template_root, HookPhase::Before)?;
-    let after_scripts = ports.hook_source.scripts(&req.template_root, HookPhase::After)?;
+/// prepare 이후의 모든 부작용을 순서대로 실행한다: before-hook → write(엔트리별 containment/
+/// overwrite/외부쓰기 게이트) → after-hook. 어느 단계에서 실패하든 첫 `Err`를 반환하며, 정리
+/// 여부 판단은 호출자(`cleanup_created_target_on_failure`)가 한다.
+fn execute_side_effects(
+    req: &ApplyRequest,
+    planned: &[PlannedWrite],
+    ctx: &AnswerContext,
+    hooks: &CollectedHooks,
+    hook_env_map: &BTreeMap<String, String>,
+    ports: &ApplyPorts,
+) -> Result<()> {
+    run_phase(
+        ports.hook_runner,
+        ports.renderer,
+        ctx,
+        &hooks.before_inline,
+        &hooks.before_scripts,
+        &req.target_root,
+        hook_env_map,
+    )?;
 
-    let has_hooks = !before_inline.is_empty()
-        || !before_scripts.is_empty()
-        || !after_inline.is_empty()
-        || !after_scripts.is_empty();
+    for planned_write in planned {
+        let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
 
-    // before+after에서 실행될 훅 전부를 부작용(target 생성·쓰기) 전에 한 번만 confirm한다.
-    if has_hooks {
-        let description = confirm_description(&before_inline, &before_scripts, &after_inline, &after_scripts);
-        if !ports.confirmer.confirm_hook(&description) {
-            bail!("hook execution was not confirmed; aborting before any writes");
+        // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
+        // 계속한다(overwrite와 달리 hard-fail이 아니다).
+        if !status.inside_target && !ports.confirmer.confirm_external_write(&status.final_path) {
+            eprintln!(
+                "warning: skipping {} — write escapes target and was not confirmed",
+                status.final_path.display()
+            );
+            continue;
         }
-    }
 
-    // target은 부작용 없는 plan 이후에 생성한다. render·소스 충돌 에러는 이미 plan에서
-    // 실패했으므로, 여기 도달 시 빈 target을 남기지 않는다.
-    let prep = ports.payload.ensure_target(&req.target_root)?;
+        if status.exists && !ports.confirmer.confirm_overwrite(&status.final_path) {
+            bail!(
+                "destination {} exists; pass --force to overwrite",
+                status.final_path.display()
+            );
+        }
 
-    // prepare 이후의 모든 부작용(before-hook·write·after-hook)을 한 스코프로 묶는다. 어느 단계에서
-    // 실패하든, 우리가 만든(`Created`) target이고 정리가 켜져 있으면 best-effort로 삭제한 뒤 원래
-    // 에러를 전파한다. 사전 존재(`Existing`) target과 정리 off는 부분 산출물을 남기고 보존한다.
-    let outcome = (|| -> Result<()> {
-        run_phase(
-            ports.hook_runner,
-            ports.renderer,
-            &ctx,
-            &before_inline,
-            &before_scripts,
+        ports.payload.write_file(
             &req.target_root,
-            &hook_env_map,
+            &planned_write.rel,
+            &planned_write.content,
+            planned_write.mode,
+            status.exists,
         )?;
-
-        for planned_write in &planned {
-            let status = ports.payload.dest_status(&req.target_root, &planned_write.rel)?;
-
-            // target 밖으로 이탈하는 쓰기는 confirm하고, 미승인이면 그 엔트리만 건너뛰고
-            // 계속한다(overwrite와 달리 hard-fail이 아니다).
-            if !status.inside_target && !ports.confirmer.confirm_external_write(&status.final_path) {
-                eprintln!(
-                    "warning: skipping {} — write escapes target and was not confirmed",
-                    status.final_path.display()
-                );
-                continue;
-            }
-
-            if status.exists && !ports.confirmer.confirm_overwrite(&status.final_path) {
-                bail!(
-                    "destination {} exists; pass --force to overwrite",
-                    status.final_path.display()
-                );
-            }
-
-            ports.payload.write_file(
-                &req.target_root,
-                &planned_write.rel,
-                &planned_write.content,
-                planned_write.mode,
-                status.exists,
-            )?;
-        }
-
-        run_phase(
-            ports.hook_runner,
-            ports.renderer,
-            &ctx,
-            &after_inline,
-            &after_scripts,
-            &req.target_root,
-            &hook_env_map,
-        )?;
-
-        Ok(())
-    })();
-
-    if let Err(e) = outcome {
-        if prep == TargetPreparation::Created && req.cleanup_on_failure {
-            if let Err(cleanup_err) = ports.payload.cleanup_target(&req.target_root) {
-                eprintln!(
-                    "warning: failed to clean up target {}: {cleanup_err:#}",
-                    req.target_root.display()
-                );
-            }
-        }
-        return Err(e);
     }
 
-    Ok(ApplyReport { planned })
+    run_phase(
+        ports.hook_runner,
+        ports.renderer,
+        ctx,
+        &hooks.after_inline,
+        &hooks.after_scripts,
+        &req.target_root,
+        hook_env_map,
+    )?;
+
+    Ok(())
+}
+
+/// prepare 이후 부작용의 정리 가드. `outcome`이 `Err`이고 우리가 만든(`Created`) target이며
+/// 정리가 켜져 있을 때만 best-effort로 삭제한 뒤 **원래 에러**를 전파한다(정리 실패는 경고만).
+/// 사전 존재(`Existing`) target과 정리 off는 부분 산출물을 남기고 보존하며, `Ok`는 그대로
+/// 통과시킨다. prepare 자체 실패는 이 함수 호출 전이라 정리 대상이 아니다.
+fn cleanup_created_target_on_failure(
+    outcome: Result<()>,
+    prep: TargetPreparation,
+    req: &ApplyRequest,
+    payload: &dyn PayloadStore,
+) -> Result<()> {
+    let Err(e) = outcome else {
+        return Ok(());
+    };
+    if prep == TargetPreparation::Created && req.cleanup_on_failure {
+        if let Err(cleanup_err) = payload.cleanup_target(&req.target_root) {
+            eprintln!(
+                "warning: failed to clean up target {}: {cleanup_err:#}",
+                req.target_root.display()
+            );
+        }
+    }
+    Err(e)
 }
 
 /// 질문을 선언 순서대로 증분 처리해 answer를 확정한다. 매 질문마다 `when`은 지금까지
@@ -1478,6 +1534,84 @@ mod tests {
                 hook_runner: &FakeHookRunner::new(),
             },
         )
+    }
+
+    // 정리 가드를 `apply` 통과 없이 직접 격리 검증한다(가드의 6분기 중 핵심 조합).
+
+    #[test]
+    fn cleanup_guard_cleans_created_target_when_enabled_and_preserves_error() {
+        let store = overwrite_conflict_store(TargetPreparation::Created, false);
+        let req = cleanup_req(true);
+        let out = cleanup_created_target_on_failure(
+            Err(anyhow::anyhow!("original boom")),
+            TargetPreparation::Created,
+            &req,
+            &store,
+        );
+        let err = out.expect_err("guard must propagate the original error");
+        assert!(err.to_string().contains("original boom"), "original error must survive: {err}");
+        assert!(*store.cleaned.borrow(), "created target must be cleaned when enabled");
+        assert_eq!(
+            store.cleaned_path.borrow().as_deref(),
+            Some(req.target_root.as_path()),
+            "cleanup must receive exactly the target root"
+        );
+    }
+
+    #[test]
+    fn cleanup_guard_preserves_existing_target() {
+        let store = overwrite_conflict_store(TargetPreparation::Existing, false);
+        let out = cleanup_created_target_on_failure(
+            Err(anyhow::anyhow!("boom")),
+            TargetPreparation::Existing,
+            &cleanup_req(true),
+            &store,
+        );
+        assert!(out.is_err());
+        assert!(!*store.cleaned.borrow(), "pre-existing target must never be cleaned");
+    }
+
+    #[test]
+    fn cleanup_guard_respects_no_cleanup_flag() {
+        let store = overwrite_conflict_store(TargetPreparation::Created, false);
+        let out = cleanup_created_target_on_failure(
+            Err(anyhow::anyhow!("boom")),
+            TargetPreparation::Created,
+            &cleanup_req(false),
+            &store,
+        );
+        assert!(out.is_err());
+        assert!(!*store.cleaned.borrow(), "--no-cleanup-on-failure must preserve the target");
+    }
+
+    #[test]
+    fn cleanup_guard_passes_through_ok_without_cleanup() {
+        let store = overwrite_conflict_store(TargetPreparation::Created, false);
+        let out = cleanup_created_target_on_failure(
+            Ok(()),
+            TargetPreparation::Created,
+            &cleanup_req(true),
+            &store,
+        );
+        assert!(out.is_ok(), "Ok outcome must pass through");
+        assert!(!*store.cleaned.borrow(), "success must not clean up");
+    }
+
+    #[test]
+    fn cleanup_guard_failure_does_not_mask_original_error() {
+        let store = overwrite_conflict_store(TargetPreparation::Created, true);
+        let out = cleanup_created_target_on_failure(
+            Err(anyhow::anyhow!("original boom")),
+            TargetPreparation::Created,
+            &cleanup_req(true),
+            &store,
+        );
+        let err = out.expect_err("guard must fail");
+        assert!(*store.cleaned.borrow(), "cleanup must have been attempted");
+        assert!(
+            err.to_string().contains("original boom"),
+            "cleanup failure must not mask the original error, got: {err}"
+        );
     }
 
     #[test]
