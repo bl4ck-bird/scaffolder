@@ -40,7 +40,17 @@ scaffolder apply rust-starter ./my-app --answers project=my-app
 
 ## Installation
 
-Build from source with Cargo:
+Install the latest release with the one-line installer (Linux and macOS):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bl4ck-bird/scaffolder/releases/latest/download/scaffolder-installer.sh | sh
+```
+
+It downloads a prebuilt binary for your platform and places it in Cargo's `bin`
+directory (`~/.cargo/bin` by default). You can also grab a binary straight from
+the [releases page](https://github.com/bl4ck-bird/scaffolder/releases).
+
+Or build from source with Cargo:
 
 ```sh
 cargo build --release   # binary at target/release/scaffolder
