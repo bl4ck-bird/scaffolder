@@ -1316,3 +1316,224 @@ fn apply_external_write_outside_target_is_skipped_noninteractively() {
         "the in-target symlink must be left untouched by the skip"
     );
 }
+
+// --- --trust forwarding to each control-file adapter (allow-with-trust + refuse-without-trust) ---
+//
+// These prove the CLI actually forwards `--trust` to every per-adapter external-symlink guard, not
+// just that refuse is the default. Each allow test observes an effect that can only appear if the
+// external control file was read via `--trust` (hook side effect, partial content, data value,
+// exclusion), so a hardcoded `trust = false` on any adapter would surface as a failing allow test.
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_external_hook_script_with_trust_and_yes() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_script = outside.path().join("x.sh");
+    fs::write(&external_script, "#!/bin/sh\necho hi > out.txt\n").expect("write external hook");
+    let mut perms = fs::metadata(&external_script)
+        .expect("metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&external_script, perms).expect("chmod +x external hook");
+    let hooks_before = template.path().join("hooks/before");
+    fs::create_dir_all(&hooks_before).expect("mkdir hooks/before");
+    symlink(&external_script, hooks_before.join("x.sh")).expect("symlink hook script");
+
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--trust").arg("--yes");
+
+    fx.cmd.assert().success();
+    // out.txt is written into the hook cwd (the target) only if the externally symlinked hook
+    // actually ran — which requires --trust to reach the hook source.
+    let out = fs::read_to_string(fx.target.join("out.txt")).expect("read out.txt");
+    assert_eq!(out.trim(), "hi");
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_external_partial_with_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(
+        template.path().join("scaffold.toml"),
+        "[[questions]]\nname = \"project\"\ntype = \"string\"\n",
+    )
+    .expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(
+        files.join("README.md.jinja"),
+        "{% include \"header\" %}\nbody",
+    )
+    .expect("write README.md.jinja");
+
+    // partials/ is a directory symlink pointing outside the source root; the `header` partial is
+    // reachable only if --trust reaches the partial source.
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_partials = outside.path().join("partials");
+    fs::create_dir_all(&external_partials).expect("mkdir external partials");
+    fs::write(external_partials.join("header"), "# {{ project }} header")
+        .expect("write external partial");
+    symlink(&external_partials, template.path().join("partials")).expect("symlink partials dir");
+
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--answers").arg("project=demo").arg("--trust");
+
+    fx.cmd.assert().success();
+    // The partial's rendered content appears in output only if the external partials dir was read.
+    let readme = fs::read_to_string(fx.target.join("README.md")).expect("read README.md");
+    assert_eq!(readme, "# demo header\nbody");
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_external_data_with_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("out.txt.jinja"), "{{ data.greeting }}").expect("write out.txt.jinja");
+
+    // data/ is a directory symlink pointing outside the source root; its value is exposed only if
+    // --trust reaches the data source.
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_data = outside.path().join("data");
+    fs::create_dir_all(&external_data).expect("mkdir external data");
+    fs::write(external_data.join("extra.toml"), "greeting = \"hi\"\n")
+        .expect("write external data file");
+    symlink(&external_data, template.path().join("data")).expect("symlink data dir");
+
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--trust");
+
+    fx.cmd.assert().success();
+    // "hi" is rendered only if the external data toml was read.
+    let out = fs::read_to_string(fx.target.join("out.txt")).expect("read out.txt");
+    assert_eq!(out, "hi");
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_allows_external_scaffoldignore_with_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+    fs::write(files.join("scratch.tmp"), "scratch").expect("write scratch.tmp");
+
+    // .scaffoldignore is a file symlink pointing outside the source root; its exclusion pattern
+    // takes effect only if --trust reaches the ignore source.
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_ignore = outside.path().join("ignore");
+    fs::write(&external_ignore, "*.tmp\n").expect("write external ignore");
+    symlink(&external_ignore, template.path().join(".scaffoldignore"))
+        .expect("symlink .scaffoldignore");
+
+    let mut fx = common::apply(template.path());
+    fx.cmd.arg("--trust");
+
+    fx.cmd.assert().success();
+    // Without reading the external pattern, scratch.tmp would be placed; its absence (and keep.txt's
+    // presence) proves the external ignore was applied.
+    assert!(
+        fx.target.join("keep.txt").exists(),
+        "non-matching file must be placed"
+    );
+    assert!(
+        !fx.target.join("scratch.tmp").exists(),
+        "matching file must be excluded by the external .scaffoldignore"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_rejects_external_partial_without_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_partials = outside.path().join("partials");
+    fs::create_dir_all(&external_partials).expect("mkdir external partials");
+    fs::write(external_partials.join("header"), "external").expect("write external partial");
+    symlink(&external_partials, template.path().join("partials")).expect("symlink partials dir");
+
+    let mut fx = common::apply(template.path());
+
+    fx.cmd.assert().failure();
+    assert!(
+        !fx.target.exists(),
+        "externally symlinked partials must abort before target creation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_rejects_external_data_without_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("marker.txt"), "marker").expect("write marker.txt");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_data = outside.path().join("data");
+    fs::create_dir_all(&external_data).expect("mkdir external data");
+    fs::write(external_data.join("extra.toml"), "greeting = \"hi\"\n")
+        .expect("write external data file");
+    symlink(&external_data, template.path().join("data")).expect("symlink data dir");
+
+    let mut fx = common::apply(template.path());
+
+    fx.cmd.assert().failure();
+    assert!(
+        !fx.target.exists(),
+        "externally symlinked data must abort before target creation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_rejects_external_scaffoldignore_without_trust() {
+    use std::os::unix::fs::symlink;
+
+    let template = tempfile::tempdir().expect("template tempdir");
+    fs::write(template.path().join("scaffold.toml"), "").expect("write scaffold.toml");
+    let files = template.path().join("files");
+    fs::create_dir_all(&files).expect("mkdir files");
+    fs::write(files.join("keep.txt"), "keep").expect("write keep.txt");
+
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let external_ignore = outside.path().join("ignore");
+    fs::write(&external_ignore, "*.tmp\n").expect("write external ignore");
+    symlink(&external_ignore, template.path().join(".scaffoldignore"))
+        .expect("symlink .scaffoldignore");
+
+    let mut fx = common::apply(template.path());
+
+    fx.cmd.assert().failure();
+    assert!(
+        !fx.target.exists(),
+        "externally symlinked .scaffoldignore must abort before target creation"
+    );
+}
